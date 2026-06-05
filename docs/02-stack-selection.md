@@ -74,7 +74,7 @@ Select a delivery-ready technology stack for SongGuesser under hard constraints:
 		- Full control and avoids third-party quota surprises.
 	- Cons:
 		- Highest ops responsibility and reliability risk for a small team.
-- Option D: MongoDB Atlas Free as primary database (evaluated, not recommended as primary)
+- Option D: MongoDB Atlas Free as primary database (selected)
 	- Typical integration path here: keep hosting/realtime on Cloudflare, replace D1 with Atlas Free.
 	- Complexity:
 		- Medium-high. Additional platform integration and quota-aware data modeling are required.
@@ -101,15 +101,27 @@ Select a delivery-ready technology stack for SongGuesser under hard constraints:
 	- Atlas decision rule for this project:
 		- GO only if all above budgets are modeled and enforced via product limits.
 		- NO-GO if expected usage exceeds any threshold or if strict no-throttle multiplayer UX is required.
-- Final recommendation: Option A (Cloudflare-first edge stack)
+- Final recommendation: Option D hybrid (Cloudflare for hosting/realtime + MongoDB Atlas Free for primary database)
 	- Rationale:
-		- Best available match for all hard constraints: fully free path across hosting, realtime, and database within quota limits.
-		- Better fit than conventional function stacks for no-sleep gameplay expectation.
-		- Keeps self-hosting as true fallback instead of default path.
-	- Alternative considered for recommendation: Option C (self-host) and Option D (MongoDB Atlas Free)
+		- Matches your explicit product-owner choice while preserving a fully free path for the approved v1 usage envelope.
+		- Keeps Cloudflare Durable Objects for authoritative multiplayer turn ordering.
+		- Uses Atlas Free where your team prefers document-model ergonomics.
+	- Alternative considered for recommendation: Option A (Cloudflare + D1) and Option C (self-host)
 	- Why not selected as primary:
+		- Option A offers lower cross-platform complexity, but was not selected due to product-owner preference for Atlas document workflows.
 		- Option C has high ops overhead and conflicts with your goal to avoid server management.
-		- Option D introduces stricter free-tier bottlenecks and platform coupling without improving your hard constraints.
+- Operating limits for v1 (approved by product owner):
+	- Expected usage: about 5 matches per week.
+	- Concurrency cap: exactly 1 lobby at a time.
+	- Lobby size: 1 to 4 players.
+	- Latency target: no strict numeric SLA for v1; turn actions should feel reasonably responsive for casual play.
+	- Cost guardrail: stack remains on free tiers only.
+- Self-host fallback trigger (approved):
+	- Switch to own server hosting only when the managed stack can no longer run fully free for the required usage.
+	- This trigger is cost-based first, not speed-based.
+- Backup and persistence policy for v1 (approved):
+	- No automatic backups required.
+	- Minimal data retention is acceptable because gameplay code is the primary asset and stored game data is low criticality.
 - Fallback options:
 	- Fallback 1 (quota pressure): Introduce strict in-product limits (max concurrent lobbies, room TTL, payload caps) to remain in free tier.
 	- Fallback 2 (hard free-tier violation): Move authoritative engine to your own server while keeping static frontend on free hosting.
@@ -124,18 +136,22 @@ Select a delivery-ready technology stack for SongGuesser under hard constraints:
 - Vendor lock-in risk is increased when using platform-specific realtime primitives.
 
 ## Open Questions
-- Define hard free-tier operating limits for v1 (max concurrent lobbies, max players per lobby, max matches per day).
-- Confirm acceptable gameplay behavior if free-tier limits are reached (queue, temporary join block, or read-only lobby view).
 - Confirm exact Spotify scopes and legal position for playback/history use before implementation lock.
 - Confirm retention and deletion policy for uploaded Spotify history files.
-- If Atlas Free is reconsidered, confirm whether the v1 feasibility envelope thresholds are acceptable as hard product limits.
+- Confirm monitoring thresholds/alerts for Atlas Free envelope (storage, ops/s, transfer, connections) before launch.
 
 ## Review Checklist
 - Confirm that permanently free constraints (hosting, DB, realtime) are treated as hard decision criteria.
 - Confirm no-sleep/cold-start expectation for core gameplay is adequately addressed by the recommended stack.
-- Confirm Option A (Cloudflare-first) is accepted as primary and Option C (self-host) as fallback only.
-- Confirm Atlas Free is documented as a conditional option with explicit GO/NO-GO limits.
+- Confirm Option D hybrid (Cloudflare + Atlas Free) is accepted as primary and Option C (self-host) as fallback only.
+- Confirm Atlas Free is documented with explicit GO/NO-GO limits and v1 operating envelope.
 - Confirm remaining legal/policy dependencies (Spotify scopes, history usage, upload retention) are acceptable to carry into architecture.
 
+## Transition Notes (Architecture)
+- Selected baseline: Cloudflare Pages + Workers + Durable Objects for frontend/API/realtime, MongoDB Atlas Free as primary persistence.
+- Architecture phase must include quota-aware data access patterns and guardrails to stay inside Atlas Free limits.
+- Multiplayer authority remains server-side in Durable Objects; DB writes should be batched and minimized per turn.
+- Carry-over blockers: Spotify legal/scope confirmation and upload retention/deletion policy.
+
 ## Status
-in-review
+approved
