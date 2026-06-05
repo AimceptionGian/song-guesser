@@ -90,5 +90,11 @@ Define a validated concept brief for a Spotify-powered song quiz web app that su
 - Confirm fallback flow for Spotify history upload is acceptable from privacy and UX perspective.
 - Confirm measurable success metrics are acceptable for next-phase planning.
 
+## Transition Notes (Stack Selection)
+- Core product requirements are fixed: three modes (singleplayer, local multiplayer, online multiplayer), host-led lobby, category gating, and 10-cards-per-player end condition.
+- Spotify integration is mandatory for playback and history-based categories, with a fallback path via uploaded Spotify history exports.
+- Scoring baseline is fixed: timeline-correct placement is required by default, with a per-match host toggle to optionally allow guess points without correct placement.
+- Known carry-over risk: legal/product confirmation for Spotify playback and listening-history usage remains required and should be treated as a hard external dependency in stack evaluation.
+
 ## Status
-in-review
+approved
