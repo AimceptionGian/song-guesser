@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SongGuesser UI Wireframe</title>
+  <style>
+    :root {
+      --bg-1: #060b14;
+      --bg-2: #0a1322;
+      --surface: #111c2c;
+      --surface-2: #0f1a29;
+      --line: #2f425f;
+      --text: #e7eff8;
+      --muted: #98abc3;
+      --accent: #34d399;
+      --accent-soft: rgba(52, 211, 153, 0.18);
+      --card-shadow: 0 18px 46px rgba(0, 0, 0, 0.44);
+      --radius-xl: 28px;
+      --radius-lg: 18px;
+      --radius-md: 14px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      font-family: "Manrope", "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% 18%, rgba(52, 211, 153, 0.17) 0%, transparent 35%),
+        radial-gradient(circle at 90% 10%, rgba(96, 165, 250, 0.14) 0%, transparent 30%),
+        linear-gradient(145deg, var(--bg-1), var(--bg-2));
+    }
+
+    .page {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 20px;
+      padding: 22px;
+      overflow: hidden;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 16px;
+      border: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 90%, #0a1422);
+      border-radius: 16px;
+      backdrop-filter: blur(10px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+
+    .brand small {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+    }
+
+    .round-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 6px var(--accent-soft);
+    }
+
+    .arena {
+      position: relative;
+      display: grid;
+      place-items: center;
+      min-height: 380px;
+      padding-inline: 86px;
+    }
+
+    .drawn-card {
+      width: min(580px, 100%);
+      background: linear-gradient(170deg, #142235, #111b2b 65%);
+      border: 1px solid #304662;
+      border-radius: var(--radius-xl);
+      box-shadow: var(--card-shadow);
+      padding: 28px;
+      position: relative;
+      z-index: 3;
+      animation: floatIn 540ms ease-out;
+    }
+
+    .card-ribbon {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.74rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #b2ffe5;
+      font-weight: 700;
+      background: rgba(52, 211, 153, 0.22);
+      padding: 7px 11px;
+      border-radius: 999px;
+      margin-bottom: 14px;
+    }
+
+    .card-title {
+      margin: 0;
+      font-size: clamp(1.4rem, 2.8vw, 2rem);
+      font-weight: 750;
+      letter-spacing: 0.01em;
+    }
+
+    .card-subtitle {
+      margin: 8px 0 20px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .fields {
+      display: grid;
+      gap: 12px;
+    }
+
+    .field {
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      align-items: center;
+      border: 1px solid #34516d;
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      min-height: 54px;
+      overflow: hidden;
+      transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+    }
+
+    .field:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.16);
+      transform: translateY(-1px);
+    }
+
+    .field-icon {
+      display: grid;
+      place-items: center;
+      height: 100%;
+      color: #7ff3c4;
+      border-right: 1px solid #34516d;
+      background: #152538;
+      font-size: 1rem;
+    }
+
+    .field input {
+      border: none;
+      outline: none;
+      background: transparent;
+      height: 100%;
+      width: 100%;
+      font-size: 1rem;
+      font-family: inherit;
+      color: var(--text);
+      padding: 0 14px;
+    }
+
+    .field input::placeholder {
+      color: #7490ab;
+    }
+
+    .card-footer {
+      margin-top: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .playback-row {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .play-btn {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      border: 1px solid #3a5572;
+      background: linear-gradient(180deg, #1f3148, #15263a);
+      color: #d6fff0;
+      font-size: 1rem;
+      display: grid;
+      place-items: center;
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.28);
+      cursor: pointer;
+    }
+
+    .play-meta {
+      display: grid;
+      gap: 6px;
+    }
+
+    .play-meta-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.82rem;
+      color: #9db2c9;
+    }
+
+    .progress-track {
+      height: 8px;
+      border-radius: 999px;
+      background: #15273b;
+      border: 1px solid #2f4661;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      width: 62%;
+      height: 100%;
+      background: linear-gradient(90deg, #34d399, #22d3ee);
+    }
+
+    .ghost-stack {
+      position: absolute;
+      inset: auto;
+      bottom: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(520px, 92%);
+      height: 14px;
+      border-radius: 999px;
+      background: rgba(2, 8, 20, 0.78);
+      filter: blur(8px);
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .side-player {
+      position: absolute;
+      width: 86px;
+      height: 86px;
+      border-radius: 999px;
+      border: 1px solid #2e4561;
+      background: linear-gradient(180deg, #17263b, #111f33);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
+      display: grid;
+      place-items: center;
+      text-align: center;
+      z-index: 4;
+      animation: popIn 460ms ease both;
+    }
+
+    .side-player.left {
+      left: 14px;
+      top: 46%;
+    }
+
+    .side-player.right {
+      right: 14px;
+      top: 46%;
+      animation-delay: 80ms;
+    }
+
+    .side-player strong {
+      display: block;
+      font-size: 1.2rem;
+      line-height: 1;
+    }
+
+    .side-player span {
+      color: var(--muted);
+      font-size: 0.72rem;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .timeline-shell {
+      border: 1px solid #2f435f;
+      background: color-mix(in srgb, var(--surface-2) 88%, #0b1424);
+      border-radius: 18px;
+      padding: 14px 14px 16px;
+      backdrop-filter: blur(8px);
+    }
+
+    .timeline-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      font-size: 0.83rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 700;
+    }
+
+    .timeline {
+      position: relative;
+      display: flex;
+      gap: 22px;
+      overflow-x: auto;
+      padding: 22px 4px 6px;
+      scrollbar-width: thin;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 58px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent 0%, rgba(115, 145, 178, 0.6) 8%, rgba(115, 145, 178, 0.6) 92%, transparent 100%);
+      pointer-events: none;
+    }
+
+    .timeline-item {
+      position: relative;
+      flex: 0 0 178px;
+      width: 178px;
+      padding-top: 22px;
+    }
+
+    .timeline-item::before {
+      content: "";
+      position: absolute;
+      top: 50px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #7f93ac;
+      box-shadow: 0 0 0 4px rgba(127, 147, 172, 0.16);
+      z-index: 2;
+    }
+
+    .timeline-item.current::before {
+      background: var(--accent);
+      box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.18);
+    }
+
+    .year {
+      display: block;
+      width: fit-content;
+      margin-left: auto;
+      margin-right: auto;
+      margin-bottom: 10px;
+      color: #d2def0;
+      font-size: 0.84rem;
+      letter-spacing: 0.03em;
+      font-weight: 700;
+      border: 1px solid #3b5370;
+      border-radius: 999px;
+      background: #16283d;
+      padding: 4px 10px;
+    }
+
+    .mini-card {
+      background: #142235;
+      border: 1px solid #2f4661;
+      border-radius: 14px;
+      padding: 9px;
+      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+      margin-top: 16px;
+      width: 100%;
+    }
+
+    .album-cover {
+      height: 108px;
+      border-radius: 10px;
+      border: 1px solid #3c5574;
+      margin-bottom: 8px;
+      background-size: cover;
+      background-position: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .album-cover::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(8, 12, 20, 0) 45%, rgba(8, 12, 20, 0.52) 100%);
+    }
+
+    .mini-card b {
+      font-size: 0.86rem;
+      line-height: 1.3;
+      display: block;
+      margin-bottom: 3px;
+    }
+
+    .mini-card small {
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+
+    .mini-card.current {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.2), 0 12px 20px rgba(0, 0, 0, 0.3);
+    }
+
+    @keyframes floatIn {
+      from {
+        opacity: 0;
+        transform: translateY(20px) scale(0.985);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    @keyframes popIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.92);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    @media (max-width: 980px) {
+      .arena {
+        padding-inline: 14px;
+      }
+
+      .side-player {
+        position: static;
+        width: auto;
+        height: auto;
+        border-radius: 14px;
+        min-width: 110px;
+        padding: 10px 12px;
+      }
+
+      .arena {
+        grid-template-rows: auto auto;
+        gap: 10px;
+      }
+
+      .player-row {
+        width: min(580px, 100%);
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        padding: 14px;
+      }
+
+      .drawn-card {
+        padding: 20px;
+        border-radius: 22px;
+      }
+
+      .card-footer {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .mini-card {
+        min-width: 144px;
+      }
+
+      .timeline-item {
+        flex: 0 0 154px;
+        width: 154px;
+      }
+
+      .album-cover {
+        height: 92px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page" role="application" aria-label="SongGuesser Wireframe">
+    <header class="topbar">
+      <div class="brand">
+        <span>SongGuesser</span>
+        <small>Online Match</small>
+      </div>
+      <div class="round-status">
+        <span class="dot" aria-hidden="true"></span>
+        <span>Runde 4 - Spieler Leon ist am Zug</span>
+      </div>
+    </header>
+
+    <main class="arena">
+      <div class="player-row" aria-hidden="true">
+        <aside class="side-player left" aria-label="Spieler links mit Punkten">
+          <div>
+            <strong>12</strong>
+            <span>Aylin</span>
+          </div>
+        </aside>
+
+        <aside class="side-player right" aria-label="Spieler rechts mit Punkten">
+          <div>
+            <strong>9</strong>
+            <span>Noah</span>
+          </div>
+        </aside>
+      </div>
+
+      <section class="drawn-card" aria-label="Gezogene Song Karte">
+        <div class="card-ribbon">Gezogene Karte</div>
+        <h1 class="card-title">Errate Interpret und Songname</h1>
+        <p class="card-subtitle">Online-Modus: Der aktive Spieler fuellt die Felder aus und bestaetigt dann den Tipp.</p>
+
+        <div class="fields">
+          <label class="field" aria-label="Interpret Eingabe">
+            <span class="field-icon" aria-hidden="true">◎</span>
+            <input type="text" placeholder="Interpret eingeben" />
+          </label>
+
+          <label class="field" aria-label="Songname Eingabe">
+            <span class="field-icon" aria-hidden="true">♪</span>
+            <input type="text" placeholder="Songname eingeben" />
+          </label>
+        </div>
+
+        <div class="playback-row" aria-label="Song Wiedergabe Status">
+          <button class="play-btn" aria-label="Song abspielen">▶</button>
+          <div class="play-meta">
+            <div class="play-meta-line">
+              <span>Song laeuft</span>
+              <span>00:38 uebrig</span>
+            </div>
+            <div class="progress-track" aria-hidden="true">
+              <div class="progress-fill"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-footer">
+          <span>Hinweis: Kein Standard-Formularstil, Fokus auf klare, moderne Inputs.</span>
+          <span>Zeit verbleibend: 00:38</span>
+        </div>
+      </section>
+
+      <div class="ghost-stack" aria-hidden="true"></div>
+    </main>
+
+    <section class="timeline-shell" aria-label="Timeline von Leon">
+      <div class="timeline-head">
+        <span>Timeline</span>
+        <span>Leon - 12 Punkte</span>
+      </div>
+      <div class="timeline">
+        <article class="timeline-item">
+          <span class="year">2000</span>
+          <div class="mini-card">
+            <div class="album-cover" style="background-image: linear-gradient(135deg, #405f7d, #1b2f49);"></div>
+            <b>Coldplay - Yellow</b>
+            <small>Runde 1</small>
+          </div>
+        </article>
+
+        <article class="timeline-item">
+          <span class="year">2013</span>
+          <div class="mini-card">
+            <div class="album-cover" style="background-image: linear-gradient(135deg, #7b4f6e, #2b2342);"></div>
+            <b>Lorde - Royals</b>
+            <small>Runde 2</small>
+          </div>
+        </article>
+
+        <article class="timeline-item current">
+          <span class="year">2019</span>
+          <div class="mini-card current">
+            <div class="album-cover" style="background-image: linear-gradient(135deg, #23716e, #12354a);"></div>
+            <b>Unbekannt - aktuelle Karte</b>
+            <small>Runde 4 (jetzt)</small>
+          </div>
+        </article>
+
+        <article class="timeline-item">
+          <span class="year">2020</span>
+          <div class="mini-card">
+            <div class="album-cover" style="background-image: linear-gradient(135deg, #6a4d43, #2d283d);"></div>
+            <b>The Weeknd - Blinding Lights</b>
+            <small>Runde 5 Platzhalter</small>
+          </div>
+        </article>
+
+        <article class="timeline-item">
+          <span class="year">2024</span>
+          <div class="mini-card">
+            <div class="album-cover" style="background-image: linear-gradient(135deg, #7a6b3f, #1d2b3c);"></div>
+            <b>Dua Lipa - Houdini</b>
+            <small>Runde 6 Platzhalter</small>
+          </div>
+        </article>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

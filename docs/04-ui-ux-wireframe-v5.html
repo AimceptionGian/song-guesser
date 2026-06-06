@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SongGuesser UI Wireframe V5 - Vinyl Record Store</title>
+  <style>
+    :root {
+      --bg-wall: #1a1412;
+      --bg-floor: #241b17;
+      --panel-wood: #3a2a22;
+      --panel-wood-soft: #4a362c;
+      --line: #7f5f4a;
+      --paper: #efe2cb;
+      --paper-soft: #dbc7a8;
+      --ink: #1c1512;
+      --muted: #b79f82;
+      --accent-red: #d84c3f;
+      --accent-green: #9ba83c;
+      --accent-blue: #3a87a5;
+      --shadow: 0 16px 34px rgba(0, 0, 0, 0.38);
+      --radius-lg: 20px;
+      --radius-md: 14px;
+      --radius-sm: 10px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      color: var(--paper);
+      background:
+        radial-gradient(80rem 42rem at -10% -10%, rgba(216, 76, 63, 0.22), transparent 48%),
+        radial-gradient(72rem 36rem at 110% -20%, rgba(58, 135, 165, 0.18), transparent 45%),
+        linear-gradient(180deg, var(--bg-wall) 0%, var(--bg-floor) 70%);
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.1;
+      background-image: repeating-linear-gradient(
+        90deg,
+        transparent 0,
+        transparent 34px,
+        rgba(239, 226, 203, 0.25) 35px,
+        transparent 36px
+      );
+      z-index: 0;
+    }
+
+    .app {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      padding: 20px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 16px;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: linear-gradient(180deg, #4b372e, #3f2f27);
+      box-shadow: var(--shadow);
+    }
+
+    .store-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .small-record {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 2px solid #282221;
+      background:
+        radial-gradient(circle, #bfb0a0 0 3px, #141211 4px 7px, #1d1918 8px 10px, #111 11px 100%),
+        repeating-radial-gradient(circle, rgba(255, 255, 255, 0.07) 0 1px, transparent 1px 3px);
+    }
+
+    .marquee {
+      border: 1px dashed #9c7d63;
+      border-radius: 999px;
+      background: rgba(27, 21, 18, 0.45);
+      color: var(--paper-soft);
+      padding: 6px 12px;
+      font-size: 0.86rem;
+      letter-spacing: 0.03em;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .round-state {
+      font-size: 0.84rem;
+      color: #f3e6d2;
+      padding: 7px 10px;
+      border-radius: 8px;
+      background: rgba(216, 76, 63, 0.22);
+      border: 1px solid rgba(216, 76, 63, 0.65);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .stage {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr) 260px;
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: linear-gradient(180deg, rgba(62, 45, 36, 0.95), rgba(47, 34, 28, 0.95));
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      padding: 11px 14px;
+      border-bottom: 1px solid rgba(181, 143, 110, 0.4);
+      background: rgba(15, 11, 10, 0.24);
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-size: 0.78rem;
+      color: #f4e8d5;
+    }
+
+    .crate-list {
+      list-style: none;
+      margin: 0;
+      padding: 10px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .crate-list li {
+      border: 1px solid #8a684f;
+      border-radius: var(--radius-sm);
+      padding: 10px;
+      background: linear-gradient(180deg, #5a4337, #4c392f);
+      display: grid;
+      gap: 5px;
+    }
+
+    .crate-list b {
+      font-size: 0.92rem;
+      color: #f8ebd8;
+    }
+
+    .crate-list span {
+      font-size: 0.8rem;
+      color: #d8c4a4;
+    }
+
+    .deck {
+      position: relative;
+      padding: 20px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+
+    .deck-grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: center;
+      border: 1px solid #8e6c54;
+      border-radius: var(--radius-md);
+      background: linear-gradient(160deg, #574136, #46342c);
+      padding: 16px;
+    }
+
+    .record {
+      width: min(100%, 320px);
+      aspect-ratio: 1;
+      border-radius: 50%;
+      border: 8px solid #0f0e0d;
+      background:
+        radial-gradient(circle, #d5c5b2 0 9px, #171513 10px 22px, #202020 23px 28px, #0f0f0f 29px 100%),
+        repeating-radial-gradient(circle, rgba(255, 255, 255, 0.08) 0 1px, transparent 1px 4px);
+      margin: 0 auto;
+      position: relative;
+      animation: spin 8s linear infinite;
+      box-shadow: 0 14px 24px rgba(0, 0, 0, 0.48);
+    }
+
+    .record::after {
+      content: "LIVE CUT";
+      position: absolute;
+      inset: auto 50% 50%;
+      transform: translate(-50%, 50%);
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.09em;
+      color: #211a16;
+      background: #e5d4bc;
+      border-radius: 999px;
+      padding: 4px 8px;
+    }
+
+    .tonearm {
+      width: 140px;
+      height: 14px;
+      background: linear-gradient(180deg, #c8bcae, #9e9182);
+      border-radius: 8px;
+      position: relative;
+      transform-origin: left center;
+      transform: rotate(18deg);
+      margin-right: 10px;
+    }
+
+    .tonearm::before {
+      content: "";
+      position: absolute;
+      left: -12px;
+      top: -7px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 2px solid #cab8a4;
+      background: #3c2f28;
+    }
+
+    .tonearm::after {
+      content: "";
+      position: absolute;
+      right: -6px;
+      top: 4px;
+      width: 12px;
+      height: 6px;
+      border-radius: 2px;
+      background: #d84c3f;
+    }
+
+    .guess-box {
+      border: 1px solid #88664f;
+      border-radius: var(--radius-md);
+      background: rgba(22, 16, 14, 0.45);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .guess-box h1 {
+      margin: 0;
+      font-size: clamp(1.2rem, 2.2vw, 1.6rem);
+      line-height: 1.25;
+    }
+
+    .guess-box p {
+      margin: 0;
+      font-size: 0.9rem;
+      color: #dac7ac;
+    }
+
+    .field {
+      display: grid;
+      grid-template-columns: 38px 1fr;
+      border: 1px solid #98775f;
+      border-radius: 11px;
+      overflow: hidden;
+      background: rgba(245, 231, 209, 0.07);
+      min-height: 48px;
+    }
+
+    .field:focus-within {
+      border-color: #d84c3f;
+      box-shadow: 0 0 0 4px rgba(216, 76, 63, 0.18);
+    }
+
+    .field span {
+      display: grid;
+      place-items: center;
+      color: #eedfc9;
+      border-right: 1px solid #98775f;
+      font-size: 0.94rem;
+      background: rgba(37, 27, 22, 0.66);
+    }
+
+    .field input {
+      border: none;
+      outline: none;
+      background: transparent;
+      color: #f6ead8;
+      padding: 0 10px;
+      font: inherit;
+    }
+
+    .field input::placeholder {
+      color: #bfa88a;
+    }
+
+    .player-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .play-btn {
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      border: 1px solid #cda884;
+      background: linear-gradient(180deg, #6b4e3f, #573f33);
+      color: #ffefdb;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+
+    .bar {
+      height: 10px;
+      border-radius: 999px;
+      background: #2a1f1a;
+      border: 1px solid #896851;
+      overflow: hidden;
+    }
+
+    .bar span {
+      display: block;
+      width: 58%;
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent-green), var(--accent-red));
+    }
+
+    .time-left {
+      font-size: 0.8rem;
+      color: #f2e4cf;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid #b18b6b;
+      background: rgba(20, 13, 11, 0.55);
+      white-space: nowrap;
+    }
+
+    .rack {
+      padding: 10px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .shelf-card {
+      border: 1px solid #8b6a52;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(180deg, #5b4336, #4c382e);
+      padding: 10px;
+      display: grid;
+      grid-template-columns: 54px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .cover {
+      width: 54px;
+      height: 54px;
+      border-radius: 8px;
+      border: 1px solid #a68468;
+      background-size: cover;
+      background-position: center;
+    }
+
+    .shelf-card b {
+      display: block;
+      font-size: 0.86rem;
+      color: #f8ebd9;
+      margin-bottom: 2px;
+    }
+
+    .shelf-card small {
+      color: #d5c2a4;
+      font-size: 0.76rem;
+    }
+
+    .timeline-panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: linear-gradient(180deg, rgba(60, 44, 36, 0.94), rgba(44, 33, 27, 0.94));
+      box-shadow: var(--shadow);
+      padding: 12px;
+    }
+
+    .timeline-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 0.78rem;
+      color: #f4e7d2;
+      margin-bottom: 8px;
+      font-weight: 700;
+    }
+
+    .timeline {
+      display: flex;
+      gap: 12px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+
+    .timeline-item {
+      flex: 0 0 180px;
+      border: 1px solid #8e6d56;
+      border-radius: 12px;
+      background: linear-gradient(180deg, #5a4336, #4b372d);
+      padding: 10px;
+      display: grid;
+      gap: 7px;
+    }
+
+    .timeline-item.current {
+      border-color: #d84c3f;
+      box-shadow: 0 0 0 3px rgba(216, 76, 63, 0.2);
+    }
+
+    .stamp {
+      width: fit-content;
+      font-size: 0.72rem;
+      border: 1px solid #bf9b7b;
+      border-radius: 999px;
+      padding: 4px 8px;
+      color: #f8ecd8;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .timeline-item b {
+      font-size: 0.86rem;
+      line-height: 1.3;
+      color: #f8ecd9;
+    }
+
+    .timeline-item small {
+      font-size: 0.74rem;
+      color: #d7c4a5;
+    }
+
+    @keyframes spin {
+      from {
+        transform: rotate(0deg);
+      }
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @media (max-width: 1080px) {
+      .stage {
+        grid-template-columns: 1fr;
+      }
+
+      .panel {
+        order: 2;
+      }
+
+      .deck {
+        order: 1;
+      }
+    }
+
+    @media (max-width: 700px) {
+      .app {
+        padding: 14px;
+      }
+
+      .topbar {
+        grid-template-columns: 1fr;
+        justify-items: stretch;
+      }
+
+      .deck {
+        padding: 14px;
+      }
+
+      .deck-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .record {
+        width: min(100%, 250px);
+      }
+
+      .tonearm {
+        margin: 0 auto;
+        transform: rotate(9deg);
+      }
+
+      .player-row {
+        grid-template-columns: auto 1fr;
+      }
+
+      .time-left {
+        grid-column: 1 / -1;
+        text-align: center;
+      }
+
+      .timeline-item {
+        flex-basis: 154px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app" role="application" aria-label="SongGuesser Wireframe V5">
+    <header class="topbar">
+      <div class="store-badge">
+        <span class="small-record" aria-hidden="true"></span>
+        <span>SongGuesser Record Store</span>
+      </div>
+      <div class="marquee">Now playing challenge crate: 1990-2024 | 6 rounds | Team Duel Night</div>
+      <div class="round-state">Round 5 - Mia at the deck</div>
+    </header>
+
+    <main class="stage">
+      <aside class="panel" aria-label="Crate Dig Sidebar">
+        <div class="panel-head">Crate Dig Queue</div>
+        <ul class="crate-list">
+          <li>
+            <b>Crate A - Synth Pop</b>
+            <span>2 cards left</span>
+          </li>
+          <li>
+            <b>Crate B - Indie Classics</b>
+            <span>4 cards left</span>
+          </li>
+          <li>
+            <b>Crate C - Hip Hop Heat</b>
+            <span>3 cards left</span>
+          </li>
+          <li>
+            <b>Crate D - Radio Mix</b>
+            <span>Wildcard track inside</span>
+          </li>
+        </ul>
+      </aside>
+
+      <section class="deck" aria-label="Main Guessing Deck">
+        <div class="deck-grid">
+          <div class="record" aria-hidden="true"></div>
+          <div class="tonearm" aria-hidden="true"></div>
+        </div>
+
+        <article class="guess-box">
+          <h1>Find artist and title before the needle lifts</h1>
+          <p>The active player listens to the vinyl snippet and enters both answers in one turn.</p>
+
+          <label class="field" aria-label="Artist input">
+            <span aria-hidden="true">A</span>
+            <input type="text" placeholder="Type artist name" />
+          </label>
+
+          <label class="field" aria-label="Title input">
+            <span aria-hidden="true">T</span>
+            <input type="text" placeholder="Type song title" />
+          </label>
+
+          <div class="player-row" aria-label="Playback controls">
+            <button class="play-btn" aria-label="Play snippet">▶</button>
+            <div class="bar" aria-hidden="true"><span></span></div>
+            <div class="time-left">00:31 left</div>
+          </div>
+        </article>
+      </section>
+
+      <aside class="panel" aria-label="Listening Booth Right Rail">
+        <div class="panel-head">Listening Booth Picks</div>
+        <div class="rack">
+          <article class="shelf-card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #8a5734, #2f4d56);"></div>
+            <div>
+              <b>Daft Punk - One More Time</b>
+              <small>Round 2 | Correct</small>
+            </div>
+          </article>
+
+          <article class="shelf-card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #7b3f4f, #3b2a45);"></div>
+            <div>
+              <b>Lana Del Rey - Summertime Sadness</b>
+              <small>Round 3 | Close guess</small>
+            </div>
+          </article>
+
+          <article class="shelf-card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #6d5e33, #2f3b50);"></div>
+            <div>
+              <b>Arctic Monkeys - Do I Wanna Know?</b>
+              <small>Round 4 | Correct</small>
+            </div>
+          </article>
+        </div>
+      </aside>
+    </main>
+
+    <section class="timeline-panel" aria-label="Round timeline">
+      <div class="timeline-head">
+        <span>Session Timeline</span>
+        <span>Team Neon Needle - 14 points</span>
+      </div>
+      <div class="timeline">
+        <article class="timeline-item">
+          <span class="stamp">Round 1</span>
+          <b>Madonna - Like a Prayer</b>
+          <small>Year guessed right, title missed</small>
+        </article>
+        <article class="timeline-item">
+          <span class="stamp">Round 2</span>
+          <b>Daft Punk - One More Time</b>
+          <small>Perfect answer in 18 sec</small>
+        </article>
+        <article class="timeline-item current">
+          <span class="stamp">Round 5 Live</span>
+          <b>Unknown track from Crate D</b>
+          <small>Needle currently spinning</small>
+        </article>
+        <article class="timeline-item">
+          <span class="stamp">Round 6</span>
+          <b>Placeholder next draw</b>
+          <small>Pending crate selection</small>
+        </article>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SongGuesser UI Wireframe V2</title>
+  <style>
+    :root {
+      --bg-0: #04070e;
+      --bg-1: #081120;
+      --bg-2: #0e1830;
+      --panel: #111c34;
+      --panel-2: #182645;
+      --line: #355078;
+      --text: #edf3ff;
+      --muted: #9bb0cf;
+      --accent: #22d3ee;
+      --accent-2: #34d399;
+      --danger: #fb7185;
+      --shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+      --radius-xl: 26px;
+      --radius-lg: 16px;
+      --radius-md: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      font-family: "Manrope", "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% 12%, rgba(34, 211, 238, 0.18), transparent 34%),
+        radial-gradient(circle at 86% 8%, rgba(52, 211, 153, 0.16), transparent 30%),
+        linear-gradient(155deg, var(--bg-0), var(--bg-1) 40%, var(--bg-2));
+    }
+
+    .stage {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 18px;
+      padding: 20px;
+    }
+
+    .topbar {
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(17, 28, 52, 0.92), rgba(13, 24, 44, 0.92));
+      border-radius: 14px;
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      backdrop-filter: blur(8px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+
+    .brand small {
+      color: var(--muted);
+      font-size: 0.76rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+
+    .match-state {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .live-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--accent-2);
+      box-shadow: 0 0 0 5px rgba(52, 211, 153, 0.2);
+    }
+
+    .arena {
+      position: relative;
+      display: grid;
+      place-items: center;
+      padding-inline: 90px;
+      min-height: 420px;
+    }
+
+    .player-chip {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 94px;
+      height: 94px;
+      border-radius: 50%;
+      background: linear-gradient(180deg, #1a2a49, #111b32);
+      border: 1px solid #3b5984;
+      display: grid;
+      place-items: center;
+      box-shadow: var(--shadow);
+      text-align: center;
+    }
+
+    .player-chip.left {
+      left: 10px;
+    }
+
+    .player-chip.right {
+      right: 10px;
+    }
+
+    .player-chip strong {
+      font-size: 1.3rem;
+      line-height: 1;
+    }
+
+    .player-chip span {
+      color: var(--muted);
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .draw-card {
+      width: min(620px, 100%);
+      border: 1px solid #3f5d87;
+      border-radius: var(--radius-xl);
+      background: linear-gradient(180deg, rgba(21, 34, 60, 0.95), rgba(14, 25, 46, 0.95));
+      box-shadow: var(--shadow);
+      padding: 26px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .draw-card::before {
+      content: "";
+      position: absolute;
+      top: -120px;
+      right: -120px;
+      width: 240px;
+      height: 240px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(34, 211, 238, 0.16), transparent 65%);
+      pointer-events: none;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(34, 211, 238, 0.18);
+      color: #baf4ff;
+      border: 1px solid rgba(34, 211, 238, 0.38);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 0.74rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1.3rem, 2.8vw, 2rem);
+      letter-spacing: 0.01em;
+    }
+
+    .sub {
+      margin: 8px 0 16px;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+
+    .fields {
+      display: grid;
+      gap: 10px;
+    }
+
+    .input-row {
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      min-height: 54px;
+      border-radius: var(--radius-md);
+      border: 1px solid #3d5982;
+      background: rgba(19, 33, 57, 0.85);
+      overflow: hidden;
+      transition: border-color 180ms ease, box-shadow 180ms ease;
+    }
+
+    .input-row:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.18);
+    }
+
+    .input-icon {
+      display: grid;
+      place-items: center;
+      color: #8feeff;
+      border-right: 1px solid #3d5982;
+      background: rgba(26, 44, 75, 0.92);
+    }
+
+    .input-row input {
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--text);
+      padding: 0 12px;
+      font: inherit;
+    }
+
+    .input-row input::placeholder {
+      color: #7892b6;
+    }
+
+    .playback {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 10px;
+      border-radius: 14px;
+      border: 1px solid #3b5781;
+      background: rgba(14, 26, 49, 0.85);
+    }
+
+    .play-btn {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      border: 1px solid #4a6996;
+      background: linear-gradient(180deg, #203456, #172844);
+      color: #d8fcff;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      box-shadow: 0 8px 14px rgba(0, 0, 0, 0.28);
+    }
+
+    .play-info {
+      display: grid;
+      gap: 6px;
+    }
+
+    .play-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+
+    .bar {
+      height: 8px;
+      border-radius: 999px;
+      border: 1px solid #3a5378;
+      background: #14233d;
+      overflow: hidden;
+    }
+
+    .bar > span {
+      display: block;
+      width: 58%;
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent-2), var(--accent));
+    }
+
+    .footer-line {
+      margin-top: 14px;
+      font-size: 0.84rem;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .timeline-shell {
+      border: 1px solid #37547d;
+      background: linear-gradient(180deg, rgba(17, 28, 52, 0.9), rgba(12, 22, 40, 0.9));
+      border-radius: 16px;
+      padding: 12px 12px 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .timeline-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: var(--muted);
+      font-size: 0.82rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .timeline {
+      position: relative;
+      display: flex;
+      gap: 18px;
+      overflow-x: auto;
+      padding: 22px 6px 8px;
+      scrollbar-width: thin;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 62px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #567ba8 8%, #567ba8 92%, transparent);
+    }
+
+    .t-item {
+      position: relative;
+      flex: 0 0 176px;
+      width: 176px;
+      padding-top: 22px;
+    }
+
+    .t-item::before {
+      content: "";
+      position: absolute;
+      top: 56px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #86a0c1;
+      box-shadow: 0 0 0 4px rgba(134, 160, 193, 0.2);
+      z-index: 2;
+    }
+
+    .t-item.current::before {
+      background: var(--accent-2);
+      box-shadow: 0 0 0 5px rgba(52, 211, 153, 0.24);
+      animation: beat 1.4s ease-in-out infinite;
+    }
+
+    .year {
+      display: block;
+      width: fit-content;
+      margin: 0 auto 10px;
+      color: #e4edff;
+      font-size: 0.82rem;
+      font-weight: 700;
+      border-radius: 999px;
+      border: 1px solid #4b6996;
+      background: #1b2e4d;
+      padding: 4px 10px;
+    }
+
+    .card {
+      margin-top: 15px;
+      width: 100%;
+      border-radius: 13px;
+      border: 1px solid #425f89;
+      background: #152743;
+      padding: 9px;
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.28);
+    }
+
+    .cover {
+      height: 106px;
+      border-radius: 9px;
+      border: 1px solid #4b688f;
+      margin-bottom: 8px;
+      background-size: cover;
+      background-position: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .cover::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(7, 11, 20, 0) 45%, rgba(7, 11, 20, 0.52) 100%);
+    }
+
+    .card b {
+      display: block;
+      font-size: 0.84rem;
+      line-height: 1.3;
+      margin-bottom: 3px;
+    }
+
+    .card small {
+      color: var(--muted);
+      font-size: 0.75rem;
+    }
+
+    .t-item.current .card {
+      border-color: var(--accent-2);
+      box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.2), 0 10px 20px rgba(0, 0, 0, 0.34);
+      animation: cardPulse 1.4s ease-in-out infinite;
+    }
+
+    @keyframes beat {
+      0%,
+      100% {
+        box-shadow: 0 0 0 5px rgba(52, 211, 153, 0.24);
+      }
+      50% {
+        box-shadow: 0 0 0 9px rgba(52, 211, 153, 0.14);
+      }
+    }
+
+    @keyframes cardPulse {
+      0%,
+      100% {
+        transform: translateY(0);
+      }
+      50% {
+        transform: translateY(-2px);
+      }
+    }
+
+    @media (max-width: 980px) {
+      .arena {
+        padding-inline: 14px;
+        gap: 10px;
+      }
+
+      .player-row {
+        width: min(620px, 100%);
+        display: flex;
+        justify-content: space-between;
+      }
+
+      .player-chip {
+        position: static;
+        transform: none;
+        width: auto;
+        height: auto;
+        border-radius: 14px;
+        min-width: 112px;
+        padding: 10px 12px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .stage {
+        padding: 14px;
+      }
+
+      .draw-card {
+        padding: 20px;
+      }
+
+      .t-item {
+        flex: 0 0 152px;
+        width: 152px;
+      }
+
+      .cover {
+        height: 90px;
+      }
+
+      .footer-line {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="stage" role="application" aria-label="SongGuesser Wireframe V2">
+    <header class="topbar">
+      <div class="brand">
+        <span>SongGuesser</span>
+        <small>Online Match</small>
+      </div>
+      <div class="match-state">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span>Runde 4 - Spieler Leon ist am Zug</span>
+      </div>
+    </header>
+
+    <main class="arena">
+      <div class="player-row" aria-hidden="true">
+        <aside class="player-chip left" aria-label="Spieler links mit Punkten">
+          <div>
+            <strong>12</strong>
+            <span>Aylin</span>
+          </div>
+        </aside>
+
+        <aside class="player-chip right" aria-label="Spieler rechts mit Punkten">
+          <div>
+            <strong>9</strong>
+            <span>Noah</span>
+          </div>
+        </aside>
+      </div>
+
+      <section class="draw-card" aria-label="Gezogene Song Karte">
+        <div class="tag">Live Song Karte</div>
+        <h1>Errate Interpret und Songname</h1>
+        <p class="sub">Online-Modus: Der aktive Spieler fuellt die Felder aus und bestaetigt dann den Tipp.</p>
+
+        <div class="fields">
+          <label class="input-row" aria-label="Interpret Eingabe">
+            <span class="input-icon" aria-hidden="true">◎</span>
+            <input type="text" placeholder="Interpret eingeben" />
+          </label>
+
+          <label class="input-row" aria-label="Songname Eingabe">
+            <span class="input-icon" aria-hidden="true">♪</span>
+            <input type="text" placeholder="Songname eingeben" />
+          </label>
+        </div>
+
+        <div class="playback" aria-label="Song Wiedergabe Status">
+          <button class="play-btn" aria-label="Song abspielen">▶</button>
+          <div class="play-info">
+            <div class="play-line">
+              <span>Song laeuft</span>
+              <span>00:38 uebrig</span>
+            </div>
+            <div class="bar" aria-hidden="true">
+              <span></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer-line">
+          <span>Modernes Input-Design ohne Standard-Bootstrap-Look.</span>
+          <span>Timer: 00:38</span>
+        </div>
+      </section>
+    </main>
+
+    <section class="timeline-shell" aria-label="Timeline von Leon">
+      <div class="timeline-head">
+        <span>Timeline</span>
+        <span>Leon - 12 Punkte</span>
+      </div>
+
+      <div class="timeline">
+        <article class="t-item">
+          <span class="year">2000</span>
+          <div class="card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #3f5f7f, #1d2f49);"></div>
+            <b>Coldplay - Yellow</b>
+            <small>Runde 1</small>
+          </div>
+        </article>
+
+        <article class="t-item">
+          <span class="year">2013</span>
+          <div class="card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #7f5274, #2f2645);"></div>
+            <b>Lorde - Royals</b>
+            <small>Runde 2</small>
+          </div>
+        </article>
+
+        <article class="t-item current">
+          <span class="year">2019</span>
+          <div class="card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #27806f, #163b4f);"></div>
+            <b>Unbekannt - aktuelle Karte</b>
+            <small>Runde 4 (jetzt)</small>
+          </div>
+        </article>
+
+        <article class="t-item">
+          <span class="year">2020</span>
+          <div class="card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #6f5348, #2f2a3f);"></div>
+            <b>The Weeknd - Blinding Lights</b>
+            <small>Runde 5 Platzhalter</small>
+          </div>
+        </article>
+
+        <article class="t-item">
+          <span class="year">2024</span>
+          <div class="card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #7d7042, #202f40);"></div>
+            <b>Dua Lipa - Houdini</b>
+            <small>Runde 6 Platzhalter</small>
+          </div>
+        </article>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

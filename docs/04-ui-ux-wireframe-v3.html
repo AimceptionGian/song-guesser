@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SongGuesser UI Wireframe V3</title>
+  <style>
+    :root {
+      --ink: #1e1a1f;
+      --paper: #f3ead8;
+      --paper-2: #e9dcc3;
+      --paper-3: #dfcfb2;
+      --accent-red: #d9553f;
+      --accent-blue: #174c92;
+      --accent-green: #1f7f5d;
+      --accent-dark: #2b2530;
+      --muted: #6d675f;
+      --shadow-hard: 0 12px 0 rgba(27, 21, 31, 0.2);
+      --shadow-soft: 0 14px 34px rgba(27, 21, 31, 0.2);
+      --radius-xl: 24px;
+      --radius-lg: 18px;
+      --radius-md: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 20%, #f5d8a7 0%, transparent 35%),
+        radial-gradient(circle at 90% 6%, #f3b3a8 0%, transparent 32%),
+        linear-gradient(135deg, #f7f0e3 0%, #f1e6cf 45%, #eadac0 100%);
+    }
+
+    .noise {
+      position: fixed;
+      inset: 0;
+      background-image: radial-gradient(rgba(0, 0, 0, 0.035) 0.65px, transparent 0.65px);
+      background-size: 4px 4px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .frame {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 18px;
+      padding: 22px;
+    }
+
+    .topbar {
+      border: 3px solid var(--accent-dark);
+      background: var(--paper);
+      border-radius: 16px;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      box-shadow: 6px 6px 0 rgba(27, 21, 31, 0.2);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .logo-chip {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 3px solid var(--accent-dark);
+      background: repeating-linear-gradient(45deg, #f8b57f, #f8b57f 4px, #f0d8b5 4px, #f0d8b5 8px);
+    }
+
+    .status {
+      font-size: 0.86rem;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      font-weight: 700;
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      border: 2px solid var(--accent-dark);
+    }
+
+    .playboard {
+      display: grid;
+      grid-template-columns: 110px 1fr 110px;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .rival {
+      border: 3px solid var(--accent-dark);
+      background: var(--paper-2);
+      border-radius: 999px;
+      width: 104px;
+      height: 104px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      box-shadow: var(--shadow-hard);
+      justify-self: center;
+    }
+
+    .rival strong {
+      display: block;
+      font-size: 1.45rem;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+
+    .rival span {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .card-wrap {
+      position: relative;
+      padding: 12px;
+    }
+
+    .card-wrap::before {
+      content: "";
+      position: absolute;
+      inset: auto 24px 0;
+      height: 16px;
+      border-radius: 50%;
+      background: rgba(39, 30, 35, 0.18);
+      filter: blur(9px);
+      z-index: 0;
+    }
+
+    .draw-card {
+      position: relative;
+      z-index: 1;
+      border: 3px solid var(--accent-dark);
+      border-radius: var(--radius-xl);
+      background: linear-gradient(180deg, var(--paper), var(--paper-2));
+      box-shadow: var(--shadow-soft);
+      padding: 22px;
+      overflow: hidden;
+    }
+
+    .draw-card::after {
+      content: "";
+      position: absolute;
+      width: 170px;
+      height: 170px;
+      border-radius: 50%;
+      border: 18px solid rgba(217, 85, 63, 0.14);
+      right: -72px;
+      top: -58px;
+    }
+
+    .ribbon {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #fff;
+      background: var(--accent-red);
+      border: 2px solid var(--accent-dark);
+      border-radius: 999px;
+      padding: 5px 10px;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1.35rem, 2.5vw, 2rem);
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      line-height: 1.2;
+    }
+
+    .sub {
+      margin: 8px 0 14px;
+      color: var(--muted);
+      font-size: 0.92rem;
+      max-width: 82%;
+    }
+
+    .fields {
+      display: grid;
+      gap: 10px;
+    }
+
+    .field {
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      border: 3px solid var(--accent-dark);
+      border-radius: var(--radius-md);
+      background: #fff8eb;
+      min-height: 52px;
+      overflow: hidden;
+      transition: transform 120ms ease;
+    }
+
+    .field:focus-within {
+      transform: translateY(-1px);
+    }
+
+    .field-icon {
+      display: grid;
+      place-items: center;
+      background: var(--paper-3);
+      border-right: 3px solid var(--accent-dark);
+      font-size: 1rem;
+      color: var(--accent-blue);
+    }
+
+    .field input {
+      border: none;
+      outline: none;
+      background: transparent;
+      padding: 0 12px;
+      font: inherit;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .field input::placeholder {
+      color: #888073;
+    }
+
+    .controls {
+      margin-top: 14px;
+      border: 3px solid var(--accent-dark);
+      border-radius: var(--radius-lg);
+      background: #fff8eb;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+    }
+
+    .play-btn {
+      width: 48px;
+      height: 48px;
+      border: 3px solid var(--accent-dark);
+      border-radius: 50%;
+      background: var(--accent-blue);
+      color: #fff;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 3px 3px 0 rgba(27, 21, 31, 0.18);
+    }
+
+    .song-time {
+      display: grid;
+      gap: 6px;
+    }
+
+    .song-time-line {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #4f4a43;
+    }
+
+    .meter {
+      height: 10px;
+      border: 3px solid var(--accent-dark);
+      border-radius: 999px;
+      background: #f5e7cd;
+      overflow: hidden;
+    }
+
+    .meter > span {
+      display: block;
+      height: 100%;
+      width: 64%;
+      background: repeating-linear-gradient(45deg, #1f7f5d, #1f7f5d 8px, #38a37a 8px, #38a37a 16px);
+    }
+
+    .meta {
+      margin-top: 12px;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 0.8rem;
+      color: #5b5449;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-weight: 700;
+    }
+
+    .timeline-shell {
+      border: 3px solid var(--accent-dark);
+      border-radius: 18px;
+      background: var(--paper);
+      padding: 12px;
+      box-shadow: 6px 6px 0 rgba(27, 21, 31, 0.2);
+    }
+
+    .timeline-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #504b43;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+
+    .timeline {
+      position: relative;
+      display: flex;
+      gap: 18px;
+      overflow-x: auto;
+      padding: 22px 6px 8px;
+      scrollbar-width: thin;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 64px;
+      height: 4px;
+      background: repeating-linear-gradient(90deg, #2b2530, #2b2530 14px, rgba(43, 37, 48, 0.2) 14px, rgba(43, 37, 48, 0.2) 22px);
+    }
+
+    .t-item {
+      position: relative;
+      flex: 0 0 186px;
+      width: 186px;
+      padding-top: 20px;
+    }
+
+    .t-item::before {
+      content: "";
+      position: absolute;
+      top: 56px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 3px solid var(--accent-dark);
+      background: var(--paper-2);
+      z-index: 2;
+    }
+
+    .t-item.current::before {
+      background: var(--accent-red);
+      animation: ping 1.6s ease-in-out infinite;
+    }
+
+    .year {
+      display: block;
+      width: fit-content;
+      margin: 0 auto 10px;
+      border: 3px solid var(--accent-dark);
+      background: #fff8eb;
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-size: 0.82rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+
+    .song-card {
+      width: 100%;
+      margin-top: 14px;
+      border: 3px solid var(--accent-dark);
+      border-radius: 14px;
+      background: #fff8eb;
+      padding: 8px;
+      box-shadow: var(--shadow-hard);
+    }
+
+    .cover {
+      height: 104px;
+      border-radius: 9px;
+      border: 3px solid var(--accent-dark);
+      margin-bottom: 8px;
+      background-size: cover;
+      background-position: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .cover::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(0, 0, 0, 0) 44%, rgba(0, 0, 0, 0.25) 100%);
+    }
+
+    .song-card b {
+      display: block;
+      font-size: 0.86rem;
+      line-height: 1.3;
+      margin-bottom: 3px;
+    }
+
+    .song-card small {
+      font-size: 0.74rem;
+      color: #60584b;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-weight: 700;
+    }
+
+    .t-item.current .song-card {
+      background: #fff0e9;
+      transform: translateY(-2px);
+    }
+
+    @keyframes ping {
+      0%,
+      100% {
+        box-shadow: 0 0 0 0 rgba(217, 85, 63, 0.28);
+      }
+      50% {
+        box-shadow: 0 0 0 7px rgba(217, 85, 63, 0);
+      }
+    }
+
+    @media (max-width: 980px) {
+      .playboard {
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+
+      .rival-wrap {
+        display: flex;
+        justify-content: space-between;
+      }
+
+      .rival {
+        width: auto;
+        height: auto;
+        min-width: 112px;
+        border-radius: 14px;
+        padding: 10px 12px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .frame {
+        padding: 14px;
+      }
+
+      .draw-card {
+        padding: 18px;
+      }
+
+      .sub {
+        max-width: 100%;
+      }
+
+      .t-item {
+        flex: 0 0 154px;
+        width: 154px;
+      }
+
+      .cover {
+        height: 88px;
+      }
+
+      .meta {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+
+  <div class="frame" role="application" aria-label="SongGuesser Wireframe V3">
+    <header class="topbar">
+      <div class="logo">
+        <span class="logo-chip" aria-hidden="true"></span>
+        <span>SongGuesser</span>
+      </div>
+      <div class="status">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span>Runde 4 - Leon ist am Zug</span>
+      </div>
+    </header>
+
+    <main class="playboard">
+      <div class="rival-wrap" aria-hidden="true">
+        <aside class="rival">
+          <div>
+            <strong>12</strong>
+            <span>Aylin</span>
+          </div>
+        </aside>
+      </div>
+
+      <section class="card-wrap">
+        <article class="draw-card" aria-label="Gezogene Song Karte">
+          <div class="ribbon">Live Song Karte</div>
+          <h1>Errate Interpret und Songname</h1>
+          <p class="sub">Online-Modus mit klaren Eingaben: erst Interpret, dann Songname. Danach wird der Tipp bestaetigt.</p>
+
+          <div class="fields">
+            <label class="field" aria-label="Interpret Eingabe">
+              <span class="field-icon" aria-hidden="true">◎</span>
+              <input type="text" placeholder="Interpret eingeben" />
+            </label>
+
+            <label class="field" aria-label="Songname Eingabe">
+              <span class="field-icon" aria-hidden="true">♪</span>
+              <input type="text" placeholder="Songname eingeben" />
+            </label>
+          </div>
+
+          <div class="controls" aria-label="Song Wiedergabe Status">
+            <button class="play-btn" aria-label="Song abspielen">PLAY</button>
+            <div class="song-time">
+              <div class="song-time-line">
+                <span>Song laeuft</span>
+                <span>00:38 uebrig</span>
+              </div>
+              <div class="meter" aria-hidden="true">
+                <span></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="meta">
+            <span>Kein Standard Bootstrap Stil</span>
+            <span>Timer 00:38</span>
+          </div>
+        </article>
+      </section>
+
+      <div class="rival-wrap" aria-hidden="true">
+        <aside class="rival">
+          <div>
+            <strong>9</strong>
+            <span>Noah</span>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <section class="timeline-shell" aria-label="Timeline von Leon">
+      <div class="timeline-head">
+        <span>Timeline</span>
+        <span>Leon - 12 Punkte</span>
+      </div>
+
+      <div class="timeline">
+        <article class="t-item">
+          <span class="year">2000</span>
+          <div class="song-card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #3f5f7f, #1d2f49);"></div>
+            <b>Coldplay - Yellow</b>
+            <small>Runde 1</small>
+          </div>
+        </article>
+
+        <article class="t-item">
+          <span class="year">2013</span>
+          <div class="song-card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #7f5274, #2f2645);"></div>
+            <b>Lorde - Royals</b>
+            <small>Runde 2</small>
+          </div>
+        </article>
+
+        <article class="t-item current">
+          <span class="year">2019</span>
+          <div class="song-card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #27806f, #163b4f);"></div>
+            <b>Unbekannt - aktuelle Karte</b>
+            <small>Runde 4 (jetzt)</small>
+          </div>
+        </article>
+
+        <article class="t-item">
+          <span class="year">2020</span>
+          <div class="song-card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #6f5348, #2f2a3f);"></div>
+            <b>The Weeknd - Blinding Lights</b>
+            <small>Runde 5 Platzhalter</small>
+          </div>
+        </article>
+
+        <article class="t-item">
+          <span class="year">2024</span>
+          <div class="song-card">
+            <div class="cover" style="background-image: linear-gradient(135deg, #7d7042, #202f40);"></div>
+            <b>Dua Lipa - Houdini</b>
+            <small>Runde 6 Platzhalter</small>
+          </div>
+        </article>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
