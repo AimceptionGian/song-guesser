@@ -12,6 +12,7 @@ Define the final documentation set and ownership.
 
 ## Decisions
 - Documentation scope: README, ARCHITECTURE, DECISIONS, TESTING, CONTRIBUTING
+- 04-ui-ux.md advanced to in-review (V7 wireframe complete)
 
 ## Risks
 - Terminology drift
