@@ -10,8 +10,6 @@ Deliver implementation increments aligned with approved tests and architecture.
 ## Inputs
 - `docs/03-architecture.md`
 - `docs/04-ui-ux.md`
-- `docs/07a-test-package-1.md` with `approved` status
-- Later test packages as they become available
 
 ## Outputs
 - `docs/08-implementation-plan.md`
