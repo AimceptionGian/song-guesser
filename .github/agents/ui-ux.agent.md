@@ -13,6 +13,8 @@ Define user flows and interface behavior for implementation clarity.
 
 ## Outputs
 - `docs/04-ui-ux.md`
+Wireframes and interaction specifications are stored in the following directory:
+- `docs/wireframes/`
 
 ## Done Criteria
 - Primary user journeys are mapped end to end.

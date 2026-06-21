@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Beat Timeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #0a0a12; color: #f0eeff; font-family: 'DM Sans', sans-serif; overflow-x: hidden; }
+  ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: rgba(168,85,247,0.3); border-radius: 4px; }
+  #ambient { position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background: radial-gradient(ellipse 60% 40% at 30% 20%, rgba(124,58,237,0.12) 0%, transparent 70%),
+                radial-gradient(ellipse 50% 35% at 70% 80%, rgba(247,37,133,0.08) 0%, transparent 70%); }
+  #root { position: relative; z-index: 1; min-height: 100vh; }
+  .screen { display: none; flex-direction: column; align-items: center; min-height: 100vh; padding: 24px 16px 40px; }
+  .screen.active { display: flex; }
+  .logo-icon { width: 56px; height: 56px; border-radius: 16px; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #7c3aed, #a855f7); box-shadow: 0 0 30px rgba(168,85,247,0.5); margin: 0 auto 16px; font-size: 26px; }
+  .hero-title { font-family: 'Bebas Neue', sans-serif; font-size: clamp(3rem,12vw,6rem); line-height: 0.95; letter-spacing: 0.02em; text-align: center; }
+  .hero-title span { background: linear-gradient(90deg, #a855f7, #f72585); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .hero-sub { color: #8b7fb8; font-size: 0.95rem; text-align: center; max-width: 340px; margin: 12px auto 0; line-height: 1.5; }
+  .players-row { display: flex; gap: 12px; width: 100%; max-width: 400px; margin-top: 8px; }
+  .player-card { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px 8px; border-radius: 16px;
+    background: #13121f; border: 1px solid rgba(168,85,247,0.2); }
+  .player-card .avatar { font-size: 24px; }
+  .player-card .pname { color: #c4b8ff; font-size: 0.85rem; font-weight: 600; }
+  .info-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; width: 100%; max-width: 400px; }
+  .info-box { display: flex; flex-direction: column; align-items: center; padding: 16px 8px; border-radius: 12px;
+    background: rgba(168,85,247,0.07); border: 1px solid rgba(168,85,247,0.15); }
+  .info-box .iico { font-size: 20px; margin-bottom: 4px; }
+  .info-box .ival { font-family: 'Bebas Neue', sans-serif; font-size: 1.4rem; color: #a855f7; line-height: 1; }
+  .info-box .ilabel { color: #8b7fb8; font-size: 0.7rem; margin-top: 2px; }
+  .btn-primary { display: flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; max-width: 400px; padding: 18px 24px; border-radius: 16px; border: none; cursor: pointer;
+    background: linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #f72585 100%);
+    color: white; font-family: 'DM Sans', sans-serif; font-weight: 700; font-size: 1.05rem; letter-spacing: 0.02em;
+    box-shadow: 0 0 40px rgba(168,85,247,0.4); transition: transform 0.15s, box-shadow 0.15s; }
+  .btn-primary:hover { transform: scale(1.03); box-shadow: 0 0 55px rgba(168,85,247,0.55); }
+  .btn-primary:active { transform: scale(0.97); }
+  .section-label { color: #8b7fb8; font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; margin-bottom: 8px; }
+  .audio-card { width: 100%; border-radius: 16px; padding: 20px;
+    background: linear-gradient(135deg, #1e1c2e 0%, #13121f 100%);
+    border: 1px solid rgba(168,85,247,0.3); transition: box-shadow 0.4s; }
+  .audio-card.playing { box-shadow: 0 0 40px rgba(168,85,247,0.25); }
+  .visualizer { display: flex; align-items: flex-end; justify-content: center; gap: 3px; height: 56px; margin-bottom: 16px; }
+  .viz-bar { width: 5px; border-radius: 3px; background: rgba(168,85,247,0.2); height: 8px; }
+  .playing .viz-bar { animation: wave var(--dur) ease-in-out infinite alternate; }
+  @keyframes wave { from { transform: scaleY(0.25); } to { transform: scaleY(1); } }
+  .progress-track { width: 100%; height: 6px; border-radius: 3px; background: rgba(168,85,247,0.15); margin-bottom: 16px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 3px; width: 0%; background: linear-gradient(90deg, #7c3aed, #a855f7, #f72585); transition: width 1s linear; }
+  .audio-controls { display: flex; align-items: center; justify-content: space-between; }
+  .ctrl-btn { background: none; border: none; cursor: pointer; padding: 8px; color: #8b7fb8; line-height: 0; transition: color 0.2s; }
+  .ctrl-btn:hover { color: #c4b8ff; }
+  .ctrl-btn svg { width: 20px; height: 20px; }
+  .play-btn { width: 60px; height: 60px; border-radius: 50%; border: none; cursor: pointer;
+    background: linear-gradient(135deg, #7c3aed, #a855f7); box-shadow: 0 0 20px rgba(168,85,247,0.5);
+    display: flex; align-items: center; justify-content: center; transition: transform 0.2s, box-shadow 0.2s; }
+  .play-btn:hover { transform: scale(1.08); }
+  .play-btn.active { background: linear-gradient(135deg, #f72585, #a855f7); box-shadow: 0 0 30px rgba(247,37,133,0.6); }
+  .play-btn svg { width: 26px; height: 26px; fill: white; color: white; }
+  .play-time { font-family: 'JetBrains Mono', monospace; color: #8b7fb8; font-size: 0.8rem; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; width: 100%; max-width: 480px; margin-bottom: 20px; }
+  .pill { padding: 6px 12px; border-radius: 8px; font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; }
+  .pill-purple { background: rgba(168,85,247,0.12); border: 1px solid rgba(168,85,247,0.25); color: #a855f7; }
+  .pill-green { background: rgba(6,214,160,0.1); border: 1px solid rgba(6,214,160,0.2); color: #06d6a0; }
+  .game-content { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 16px; }
+  .card { border-radius: 16px; padding: 20px; background: #13121f; border: 1px solid rgba(168,85,247,0.25); }
+  .card-gradient { background: linear-gradient(135deg, #1e1c2e 0%, #13121f 100%); }
+  .timeline-track { position: relative; height: 12px; border-radius: 6px; cursor: pointer; user-select: none;
+    background: rgba(168,85,247,0.15); border: 1px solid rgba(168,85,247,0.3); }
+  .timeline-fill { position: absolute; top: 0; left: 0; height: 100%; border-radius: 6px;
+    background: linear-gradient(90deg, #7c3aed, #a855f7); pointer-events: none; }
+  .timeline-thumb { position: absolute; top: 50%; transform: translate(-50%, -50%);
+    width: 24px; height: 24px; border-radius: 50%; background: #a855f7;
+    box-shadow: 0 0 12px rgba(168,85,247,0.7); display: flex; align-items: center; justify-content: center;
+    transition: box-shadow 0.15s; pointer-events: none; }
+  .timeline-thumb .dot { width: 8px; height: 8px; border-radius: 50%; background: white; }
+  .timeline-thumb.dragging { box-shadow: 0 0 22px rgba(168,85,247,1); }
+  .decade-row { position: relative; height: 28px; margin-top: 8px; }
+  .decade-mark { position: absolute; display: flex; flex-direction: column; align-items: center; transform: translateX(-50%); }
+  .decade-mark .tick { width: 1px; height: 6px; background: rgba(168,85,247,0.4); }
+  .decade-mark .dlabel { font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; color: #8b7fb8; margin-top: 2px; }
+  .year-display { text-align: center; margin-top: 12px; }
+  .year-display .year { font-family: 'Bebas Neue', sans-serif; font-size: 3.5rem; color: #a855f7;
+    letter-spacing: 0.05em; text-shadow: 0 0 30px rgba(168,85,247,0.6); }
+  .input-label { display: block; color: #c4b8ff; font-size: 0.8rem; font-weight: 600; margin-bottom: 8px; }
+  .text-input { width: 100%; padding: 12px 16px; border-radius: 10px; outline: none;
+    background: #1e1c2e; border: 1px solid rgba(168,85,247,0.25); color: #f0eeff;
+    font-family: 'DM Sans', sans-serif; font-size: 0.95rem; transition: border-color 0.2s; }
+  .text-input:focus { border-color: rgba(168,85,247,0.7); }
+  .text-input::placeholder { color: #4a4365; }
+  .input-group { display: flex; flex-direction: column; gap: 4px; }
+  .points-hero { text-align: center; margin-bottom: 4px; }
+  .points-big { font-family: 'Bebas Neue', sans-serif; font-size: 5rem; line-height: 1; }
+  .points-big.positive { color: #06d6a0; text-shadow: 0 0 40px rgba(6,214,160,0.6); }
+  .points-big.negative { color: #ff4d6d; text-shadow: 0 0 40px rgba(255,77,109,0.5); }
+  .points-label { color: #8b7fb8; font-size: 0.82rem; margin-top: 4px; }
+  .result-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .check { color: #06d6a0; } .cross { color: #ff4d6d; }
+  .result-val { font-size: 0.9rem; }
+  .result-val.correct { color: #06d6a0; } .result-val.wrong { color: #ff4d6d; }
+  .result-val .arrow { color: #8b7fb8; } .result-val .correct-ans { color: #a855f7; }
+  .year-diff { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; margin-left: auto; }
+  .diff-exact { color: #06d6a0; } .diff-close { color: #ffd60a; } .diff-far { color: #ff4d6d; }
+  .scoreboard { border-radius: 16px; padding: 16px; background: #13121f; border: 1px solid rgba(168,85,247,0.2); }
+  .sb-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .sb-title { display: flex; align-items: center; gap: 6px; color: #f0eeff; font-weight: 600; font-size: 0.9rem; }
+  .sb-round { font-family: 'JetBrains Mono', monospace; color: #8b7fb8; font-size: 0.78rem; }
+  .sb-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; margin-bottom: 6px; }
+  .sb-row.top { background: rgba(255,214,10,0.08); border: 1px solid rgba(255,214,10,0.2); }
+  .sb-row.normal { background: rgba(168,85,247,0.05); border: 1px solid transparent; }
+  .sb-rank { width: 20px; text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: #8b7fb8; font-weight: 600; }
+  .sb-rank.gold { color: #ffd60a; }
+  .sb-avatar { width: 32px; height: 32px; border-radius: 50%; background: rgba(168,85,247,0.2); display: flex; align-items: center; justify-content: center; font-size: 16px; }
+  .sb-name { flex: 1; color: #f0eeff; font-weight: 500; font-size: 0.9rem; }
+  .sb-score { font-family: 'Bebas Neue', sans-serif; font-size: 1.25rem; color: #a855f7; }
+  .sb-score.gold { color: #ffd60a; }
+  .final-winner { text-align: center; margin-bottom: 24px; }
+  .final-trophy { font-size: 64px; display: block; margin-bottom: 8px; }
+  .final-title { font-family: 'Bebas Neue', sans-serif; font-size: 3rem; color: #ffd60a; text-shadow: 0 0 40px rgba(255,214,10,0.6); }
+  .final-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 12px; margin-bottom: 8px; }
+  .final-row.gold { background: rgba(255,214,10,0.1); border: 1px solid rgba(255,214,10,0.3); }
+  .final-row.silver { background: #13121f; border: 1px solid rgba(168,85,247,0.15); }
+  .final-pos { font-family: 'Bebas Neue', sans-serif; font-size: 1.5rem; width: 28px; text-align: center; }
+  .final-row.gold .final-pos { color: #ffd60a; } .final-row.silver .final-pos { color: #c0c0c0; }
+  .final-name { flex: 1; color: #f0eeff; font-weight: 600; }
+  .final-score { font-family: 'Bebas Neue', sans-serif; font-size: 1.4rem; color: #a855f7; }
+  .btn-ghost { display: flex; align-items: center; gap: 8px; padding: 14px 28px; border-radius: 12px;
+    background: rgba(168,85,247,0.12); border: 1px solid rgba(168,85,247,0.28); color: #c4b8ff;
+    cursor: pointer; font-family: 'DM Sans', sans-serif; font-weight: 600; font-size: 0.95rem;
+    transition: background 0.2s; margin-top: 12px; }
+  .btn-ghost:hover { background: rgba(168,85,247,0.22); }
+  .btn-ghost svg { width: 18px; height: 18px; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-up { animation: fadeUp 0.4s ease forwards; }
+  @keyframes popIn { from { opacity: 0; transform: scale(0.88); } to { opacity: 1; transform: scale(1); } }
+  .pop-in { animation: popIn 0.35s cubic-bezier(.34,1.56,.64,1) forwards; }
+  .gap16 { display: flex; flex-direction: column; gap: 16px; }
+  .w100 { width: 100%; max-width: 480px; }
+</style>
+</head>
+<body>
+<div id="ambient"></div>
+<div id="root">
+
+  <!-- LOBBY -->
+  <div id="screen-lobby" class="screen active" style="gap:20px;">
+    <div class="fade-up" style="text-align:center;margin-top:20px;">
+      <div class="logo-icon">🎵</div>
+      <h1 class="hero-title">BEAT<br><span>TIMELINE</span></h1>
+      <p class="hero-sub">Erkenne den Song · Platziere ihn im Zeitstrahl · Rate Interpret &amp; Titel</p>
+    </div>
+    <div class="fade-up" style="width:100%;max-width:400px;animation-delay:0.1s;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+        <span style="color:#8b7fb8;font-size:0.85rem;">👥 3 Spieler bereit</span>
+      </div>
+      <div class="players-row">
+        <div class="player-card"><div class="avatar">🎵</div><div class="pname">Alex</div></div>
+        <div class="player-card"><div class="avatar">🎸</div><div class="pname">Jordan</div></div>
+        <div class="player-card"><div class="avatar">🎤</div><div class="pname">Sam</div></div>
+      </div>
+    </div>
+    <div class="info-grid fade-up w100" style="animation-delay:0.18s;">
+      <div class="info-box"><div class="iico">🎵</div><div class="ival">5</div><div class="ilabel">Songs</div></div>
+      <div class="info-box"><div class="iico">⭐</div><div class="ival">1000</div><div class="ilabel">Max. Punkte</div></div>
+      <div class="info-box"><div class="iico">📅</div><div class="ival">60 J.</div><div class="ilabel">Zeitraum</div></div>
+    </div>
+    <button class="btn-primary fade-up" style="animation-delay:0.28s;" onclick="startGame()">
+      Spiel starten ›
+    </button>
+  </div>
+
+  <!-- LISTEN -->
+  <div id="screen-listen" class="screen" style="gap:0;">
+    <div class="topbar">
+      <div class="pill pill-purple" id="listen-round-label">Song 1 / 5</div>
+      <div class="pill pill-green" id="listen-genre">Pop</div>
+    </div>
+    <div class="game-content">
+      <div class="fade-up" style="text-align:center;margin-bottom:8px;">
+        <div style="font-size:48px;margin-bottom:8px;" id="listen-emoji">🎵</div>
+        <h2 style="font-family:'Bebas Neue',sans-serif;font-size:1.8rem;letter-spacing:0.03em;">Welcher Song ist das?</h2>
+        <p style="color:#8b7fb8;font-size:0.88rem;margin-top:6px;">Hör den Ausschnitt und tippe dann deine Antworten ein</p>
+      </div>
+      <div class="audio-card fade-up" id="listen-audio-card" style="animation-delay:0.1s;">
+        <div class="visualizer" id="listen-viz"></div>
+        <div class="progress-track"><div class="progress-fill" id="listen-progress"></div></div>
+        <div class="audio-controls">
+          <button class="ctrl-btn" id="listen-mute-btn" onclick="toggleMute()" title="Mute">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="listen-mute-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+          </button>
+          <button class="play-btn" id="listen-play-btn" onclick="togglePlay()">
+            <svg viewBox="0 0 24 24" id="listen-play-icon"><polygon points="5 3 19 12 5 21 5 3" fill="white"/></svg>
+          </button>
+          <span class="play-time" id="listen-time">0:00 / 0:30</span>
+        </div>
+      </div>
+      <button class="btn-primary fade-up" style="animation-delay:0.2s;" onclick="goToGuess()">
+        Ich kenne den Song → Antwort geben
+      </button>
+      <div class="scoreboard fade-up" style="animation-delay:0.28s;" id="listen-scoreboard"></div>
+    </div>
+  </div>
+
+  <!-- GUESS -->
+  <div id="screen-guess" class="screen" style="gap:0;">
+    <div class="topbar">
+      <div class="pill pill-purple" id="guess-round-label">Song 1 / 5</div>
+      <div class="pill pill-green" id="guess-genre">Pop</div>
+    </div>
+    <div class="game-content">
+      <div class="audio-card" id="guess-audio-card">
+        <div class="visualizer" id="guess-viz"></div>
+        <div class="progress-track"><div class="progress-fill" id="guess-progress"></div></div>
+        <div class="audio-controls">
+          <button class="ctrl-btn" onclick="toggleMute()" title="Mute">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="guess-mute-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+          </button>
+          <button class="play-btn" id="guess-play-btn" onclick="togglePlay()">
+            <svg viewBox="0 0 24 24" id="guess-play-icon"><polygon points="5 3 19 12 5 21 5 3" fill="white"/></svg>
+          </button>
+          <span class="play-time" id="guess-time">0:00 / 0:30</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="section-label">01 · ZEITSTRAHL — Wann erschien dieser Song?</div>
+        <div class="timeline-track" id="timeline-track">
+          <div class="timeline-fill" id="timeline-fill" style="width:50%;"></div>
+          <div class="timeline-thumb" id="timeline-thumb" style="left:50%;"><div class="dot"></div></div>
+        </div>
+        <div class="decade-row" id="decade-row"></div>
+        <div class="year-display"><div class="year" id="year-display">1992</div></div>
+      </div>
+      <div class="card gap16">
+        <div class="section-label">02 · INTERPRET &amp; TITEL</div>
+        <div class="input-group">
+          <label class="input-label">Interpret / Band</label>
+          <input class="text-input" id="artist-input" type="text" placeholder="z.B. Queen, Beyoncé, Coldplay…" />
+        </div>
+        <div class="input-group">
+          <label class="input-label">Songtitel</label>
+          <input class="text-input" id="title-input" type="text" placeholder="z.B. Bohemian Rhapsody…" />
+        </div>
+      </div>
+      <button class="btn-primary" onclick="submitGuess()">Antwort bestätigen ✓</button>
+    </div>
+  </div>
+
+  <!-- RESULT -->
+  <div id="screen-result" class="screen" style="gap:0;">
+    <div class="game-content">
+      <div class="card card-gradient pop-in" id="result-content" style="display:flex;flex-direction:column;gap:16px;box-shadow:0 0 60px rgba(168,85,247,0.15);"></div>
+      <div class="scoreboard" id="result-scoreboard" style="margin-top:0;"></div>
+    </div>
+  </div>
+
+  <!-- FINAL -->
+  <div id="screen-final" class="screen" style="gap:0;justify-content:center;">
+    <div class="final-winner pop-in">
+      <span class="final-trophy">🏆</span>
+      <div class="final-title">GEWINNER</div>
+      <div id="final-winner-info" style="margin-top:4px;"></div>
+    </div>
+    <div class="w100" id="final-ranking"></div>
+    <button class="btn-ghost" onclick="restartGame()">
+      ↺ Nochmal spielen
+    </button>
+  </div>
+
+</div>
+<script>
+const SONGS = [
+  { title: "Bohemian Rhapsody",      artist: "Queen",           year: 1975, genre: "Rock",   emoji: "🎸" },
+  { title: "Billie Jean",             artist: "Michael Jackson", year: 1982, genre: "Pop",    emoji: "🕺" },
+  { title: "Smells Like Teen Spirit", artist: "Nirvana",         year: 1991, genre: "Grunge", emoji: "🤘" },
+  { title: "Rolling in the Deep",     artist: "Adele",           year: 2010, genre: "Soul",   emoji: "🎤" },
+  { title: "Shape of You",            artist: "Ed Sheeran",      year: 2017, genre: "Pop",    emoji: "🎶" },
+];
+const PLAYERS = [
+  { name: "Alex",   score: 0, avatar: "🎵" },
+  { name: "Jordan", score: 0, avatar: "🎸" },
+  { name: "Sam",    score: 0, avatar: "🎤" },
+];
+const MIN_YEAR = 1960, MAX_YEAR = 2024;
+const DECADES  = [1960,1970,1980,1990,2000,2010,2020];
+
+let state = { round:0, yearGuess:1992, playing:false, muted:false, progressPct:0, timer:null, elapsed:0 };
+
+function yearToPercent(y){ return ((y-MIN_YEAR)/(MAX_YEAR-MIN_YEAR))*100; }
+function percentToYear(p){ return Math.round(MIN_YEAR+(p/100)*(MAX_YEAR-MIN_YEAR)); }
+function calcPoints(yg,cy,aOk,tOk){
+  const d=Math.abs(yg-cy);
+  let p=0;
+  if(d===0)p+=500; else if(d<=2)p+=400; else if(d<=5)p+=250; else if(d<=10)p+=100;
+  if(aOk)p+=300; if(tOk)p+=200; return p;
+}
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0,0);
+}
+function fmt(s){ return Math.floor(s/60)+':'+(s%60<10?'0':'')+s%60; }
+
+// Visualizer
+function buildViz(id, n=28){
+  const el=document.getElementById(id); el.innerHTML='';
+  for(let i=0;i<n;i++){
+    const b=document.createElement('div'); b.className='viz-bar';
+    const dur=(0.5+(i%5)*0.12).toFixed(2)+'s';
+    b.style.setProperty('--dur',dur);
+    b.style.animationDelay=(i*0.04).toFixed(2)+'s';
+    const c=i%3===0?'#a855f7':i%3===1?'#06d6a0':'#f72585';
+    b.dataset.color=c; el.appendChild(b);
+  }
+}
+function setVizPlaying(id,on){
+  const el=document.getElementById(id);
+  const card=el.closest('.audio-card');
+  if(on){ card.classList.add('playing'); el.querySelectorAll('.viz-bar').forEach(b=>b.style.background=b.dataset.color); }
+  else  { card.classList.remove('playing'); el.querySelectorAll('.viz-bar').forEach(b=>{ b.style.background='rgba(168,85,247,0.2)'; b.style.height='8px'; }); }
+}
+
+// Play
+function togglePlay(){
+  state.playing=!state.playing;
+  if(state.playing){
+    state.timer=setInterval(()=>{
+      state.elapsed=Math.min(30,state.elapsed+1);
+      state.progressPct=Math.min(100,(state.elapsed/30)*100);
+      syncAll();
+      if(state.elapsed>=30){ clearInterval(state.timer); state.playing=false; updatePlayBtns(); setVizPlaying('listen-viz',false); setVizPlaying('guess-viz',false); }
+    },1000);
+  } else { clearInterval(state.timer); }
+  updatePlayBtns();
+  setVizPlaying('listen-viz',state.playing);
+  setVizPlaying('guess-viz',state.playing);
+}
+function syncAll(){
+  ['listen','guess'].forEach(c=>{
+    const pf=document.getElementById(c+'-progress');
+    if(pf) pf.style.width=state.progressPct+'%';
+    const t=document.getElementById(c+'-time');
+    if(t) t.textContent=fmt(state.elapsed)+' / 0:30';
+  });
+}
+function updatePlayBtns(){
+  ['listen','guess'].forEach(c=>{
+    const btn=document.getElementById(c+'-play-btn');
+    const ico=document.getElementById(c+'-play-icon');
+    if(!btn)return;
+    if(state.playing){ btn.classList.add('active'); ico.innerHTML='<rect x="6" y="4" width="4" height="16" fill="white"/><rect x="14" y="4" width="4" height="16" fill="white"/>'; }
+    else { btn.classList.remove('active'); ico.innerHTML='<polygon points="5 3 19 12 5 21 5 3" fill="white"/>'; }
+  });
+}
+function toggleMute(){
+  state.muted=!state.muted;
+  ['listen','guess'].forEach(c=>{
+    const ico=document.getElementById(c+'-mute-icon');
+    if(!ico)return;
+    if(state.muted){ ico.innerHTML='<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15" stroke="#ff4d6d"/><line x1="17" y1="9" x2="23" y2="15" stroke="#ff4d6d"/>'; }
+    else { ico.innerHTML='<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>'; }
+  });
+}
+
+// Timeline
+function buildDecades(){
+  const row=document.getElementById('decade-row'); row.innerHTML='';
+  DECADES.forEach(d=>{
+    const p=yearToPercent(d);
+    const m=document.createElement('div'); m.className='decade-mark'; m.style.left=p+'%';
+    m.innerHTML=`<div class="tick"></div><div class="dlabel">${d}</div>`;
+    row.appendChild(m);
+  });
+}
+function setYear(y){
+  state.yearGuess=y;
+  const p=yearToPercent(y);
+  document.getElementById('timeline-fill').style.width=p+'%';
+  document.getElementById('timeline-thumb').style.left=p+'%';
+  document.getElementById('year-display').textContent=y;
+}
+function initTimeline(){
+  const track=document.getElementById('timeline-track');
+  let dragging=false;
+  function update(e){
+    const rect=track.getBoundingClientRect();
+    const x=e.touches?e.touches[0].clientX:e.clientX;
+    const p=Math.max(0,Math.min(100,((x-rect.left)/rect.width)*100));
+    setYear(percentToYear(p));
+  }
+  track.addEventListener('mousedown',e=>{dragging=true;document.getElementById('timeline-thumb').classList.add('dragging');update(e);});
+  track.addEventListener('touchstart',e=>{dragging=true;update(e);},{passive:true});
+  document.addEventListener('mousemove',e=>{if(dragging)update(e);});
+  document.addEventListener('touchmove',e=>{if(dragging)update(e);},{passive:true});
+  document.addEventListener('mouseup',()=>{dragging=false;document.getElementById('timeline-thumb').classList.remove('dragging');});
+  document.addEventListener('touchend',()=>{dragging=false;});
+}
+
+// Scoreboard
+function renderScoreboard(id,round){
+  const el=document.getElementById(id); if(!el)return;
+  const sorted=[...PLAYERS].sort((a,b)=>b.score-a.score);
+  el.innerHTML=`<div class="sb-header"><div class="sb-title">🏆 Rangliste</div><div class="sb-round">Runde ${round}/${SONGS.length}</div></div>`
+    +sorted.map((p,i)=>`<div class="sb-row ${i===0?'top':'normal'}">
+      <div class="sb-rank ${i===0?'gold':''}">${i===0?'★':'#'+(i+1)}</div>
+      <div class="sb-avatar">${p.avatar}</div>
+      <div class="sb-name">${p.name}</div>
+      <div class="sb-score ${i===0?'gold':''}">${p.score}</div>
+    </div>`).join('');
+}
+
+// Game flow
+function startGame(){
+  state.round=0; PLAYERS.forEach(p=>p.score=0); loadRound(); showScreen('screen-listen');
+}
+function loadRound(){
+  const s=SONGS[state.round];
+  state.playing=false; state.progressPct=0; state.elapsed=0;
+  clearInterval(state.timer);
+  document.getElementById('listen-round-label').textContent=`Song ${state.round+1} / ${SONGS.length}`;
+  document.getElementById('guess-round-label').textContent=`Song ${state.round+1} / ${SONGS.length}`;
+  document.getElementById('listen-genre').textContent=s.genre;
+  document.getElementById('guess-genre').textContent=s.genre;
+  document.getElementById('listen-emoji').textContent=s.emoji;
+  buildViz('listen-viz'); buildViz('guess-viz');
+  syncAll(); updatePlayBtns();
+  document.getElementById('artist-input').value='';
+  document.getElementById('title-input').value='';
+  setYear(1992);
+  renderScoreboard('listen-scoreboard',state.round+1);
+  setVizPlaying('listen-viz',false); setVizPlaying('guess-viz',false);
+}
+function goToGuess(){ showScreen('screen-guess'); }
+function submitGuess(){
+  const s=SONGS[state.round];
+  const ag=document.getElementById('artist-input').value.trim();
+  const tg=document.getElementById('title-input').value.trim();
+  const aOk=ag.toLowerCase()===s.artist.toLowerCase();
+  const tOk=tg.toLowerCase()===s.title.toLowerCase();
+  const pts=calcPoints(state.yearGuess,s.year,aOk,tOk);
+  PLAYERS[0].score+=pts;
+  renderResult(state.yearGuess,s,ag,aOk,tg,tOk,pts);
+  renderScoreboard('result-scoreboard',state.round+1);
+  showScreen('screen-result');
+}
+function renderResult(yg,s,ag,aOk,tg,tOk,pts){
+  const d=Math.abs(yg-s.year);
+  const dc=d===0?'diff-exact':d<=5?'diff-close':'diff-far';
+  const dl=d===0?'Exakt!':'±'+d+' Jahre';
+  document.getElementById('result-content').innerHTML=`
+    <div class="points-hero">
+      <div class="points-big ${pts>0?'positive':'negative'}">+${pts}</div>
+      <div class="points-label">Punkte diese Runde</div>
+    </div>
+    <div style="border-radius:10px;padding:14px;background:rgba(168,85,247,0.07);border:1px solid rgba(168,85,247,0.15);">
+      <div class="section-label" style="margin-bottom:8px;">ZEITSTRAHL</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div class="result-row" style="margin:0;">
+          ${d<=3?`<span class="check">✓</span><span class="result-val correct">${yg}</span>`
+                :`<span class="cross">✗</span><span class="result-val wrong">${yg}</span>
+                  <span class="result-val"><span class="arrow">→ </span><span class="correct-ans">${s.year}</span></span>`}
+        </div>
+        <span class="year-diff ${dc}">${dl}</span>
+      </div>
+    </div>
+    <div style="border-radius:10px;padding:14px;background:rgba(168,85,247,0.07);border:1px solid rgba(168,85,247,0.15);">
+      <div class="section-label" style="margin-bottom:8px;">INTERPRET &amp; SONG</div>
+      <div class="result-row">
+        ${aOk?`<span class="check">✓</span><span class="result-val correct">${ag||'—'}</span>`
+             :`<span class="cross">✗</span><span class="result-val wrong">${ag||'—'}</span>
+               <span class="result-val"><span class="arrow">→ </span><span class="correct-ans">${s.artist}</span></span>`}
+      </div>
+      <div class="result-row" style="margin:0;">
+        ${tOk?`<span class="check">✓</span><span class="result-val correct">${tg||'—'}</span>`
+             :`<span class="cross">✗</span><span class="result-val wrong">${tg||'—'}</span>
+               <span class="result-val"><span class="arrow">→ </span><span class="correct-ans">${s.title}</span></span>`}
+      </div>
+    </div>
+    <button class="btn-primary" onclick="nextRound()" style="max-width:100%;">
+      ${state.round+1>=SONGS.length?'Ergebnisse anzeigen 🏆':'Nächster Song →'}
+    </button>`;
+}
+function nextRound(){
+  state.round++;
+  if(state.round>=SONGS.length) showFinal();
+  else { loadRound(); showScreen('screen-listen'); }
+}
+function showFinal(){
+  const sorted=[...PLAYERS].sort((a,b)=>b.score-a.score);
+  const w=sorted[0];
+  document.getElementById('final-winner-info').innerHTML=
+    `<div style="font-size:40px;">${w.avatar}</div>
+     <div style="font-family:'Bebas Neue',sans-serif;font-size:2rem;color:#f0eeff;">${w.name}</div>
+     <div style="font-family:'Bebas Neue',sans-serif;font-size:3.5rem;color:#a855f7;text-shadow:0 0 30px rgba(168,85,247,0.6);">${w.score} PTS</div>`;
+  document.getElementById('final-ranking').innerHTML=sorted.map((p,i)=>`
+    <div class="final-row ${i===0?'gold':'silver'}">
+      <div class="final-pos">#${i+1}</div><div style="font-size:22px;">${p.avatar}</div>
+      <div class="final-name">${p.name}</div><div class="final-score">${p.score}</div>
+    </div>`).join('');
+  showScreen('screen-final');
+}
+function restartGame(){ PLAYERS.forEach(p=>p.score=0); state.round=0; showScreen('screen-lobby'); }
+
+// Init
+buildViz('listen-viz'); buildViz('guess-viz');
+buildDecades(); initTimeline();
+setYear(1992); renderScoreboard('listen-scoreboard',1);
+</script>
+</body>
+</html>
