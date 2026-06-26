@@ -8,5 +8,100 @@ Track completed slices, blocked items, and test alignment over time.
   - Cards integrated directly into timeline zone (above track: placed cards, below track: current song).
   - Collision resolution algorithm prevents card overlap at any year value.
   - Stem lines + indicator dots show exact year mapping.
+- 2026-06-22: Frontend project scaffolded (Vite + React + TypeScript + React Router).
+  - All 4 screens implemented: Lobby, Game, Result, Final.
+  - Timeline component with drag/click interaction.
+  - Mock data layer with songs and players.
+  - Full scoring logic (artist, title, year accuracy).
+  - Build verified with zero TypeScript errors.
+- 2026-06-22: Backend API scaffolded (Cloudflare Workers + Hono + Durable Objects).
+  - API routes: health, lobbies CRUD, join/leave/start, categories, WS relay.
+  - Lobby service with in-memory lobby store, code generation, player management.
+  - Scoring service with artist/title/year accuracy calculation.
+  - Category service with eligibility validation and history-dependent filtering.
+  - MatchRoom Durable Object with authoritative game state machine, WebSocket connections, turn commands.
+  - Catalog provider interface (provider-agnostic) + MockCatalogProvider implementation.
+  - Shared mock data with 15 tracks across frontend and backend.
+  - Both frontend (tsc + Vite build) and backend (tsc) pass with zero errors.
   - Purple/pink neon theme from Figma design preserved.
   - No drag-and-drop; year thumb placement is the core interaction.
+- 2026-06-22 (continued): Test infrastructure & bugfixes.
+  - Removed dead `calculateScore()` function (was comparing against empty strings).
+  - Installed Vitest v4 in both `workers/` and root `package.json`.
+  - Created `vitest.config.ts` for frontend (jsdom + React) and backend (node).
+  - Wrote 10 unit tests for `scoring-service.ts` (full coverage: max points, zero points, year clamping, case-insensitivity, whitespace).
+  - Wrote 12 unit tests for `lobby-service.ts` (CRUD, player limits, code generation uniqueness, lobby cleanup).
+  - Wrote 8 unit tests for `category-service.ts` (history filtering, eligibility validation).
+  - All 29 tests passing across 3 test suites.
+  - Fixed `tsc` build error in GameScreen (`timestamp` removed from WS send calls — type mismatch).
+  - Both frontend (`tsc -b`) and backend (`tsc --noEmit`) still pass with zero errors.
+  - Test files excluded from main tsconfig via `exclude: ["src/**/__tests__"]`.
+  - Updated TESTING.md with concrete strategy and execution status table.
+- 2026-06-22 (continued): Frontend error/loading states improved.
+  - Added `isLoading` state to GameScreen with spinner animation during card draw.
+  - Loading UI: spinner element, disabled button with opacity, "Wird geladen…" text.
+  - Added WS connection indicator dot (green/red) in GameScreen top bar.
+  - Added WS error banner to GameScreen (shows `useWebSocket` error messages).
+  - Added redirect guard for missing `gameCode` param via useEffect.
+  - Fixed TS error in GameScreen (removed `timestamp` from WS send payloads).
+  - Added CSS animations: spinner rotation, error banner with soft red theme.
+- 2026-06-22 (continued): Deezer API Adapter + AudioPlayer.
+  - Implemented `DeezerCatalogProvider` with search, getTrack, getPreviewUrl, getChartTracks, searchByArtist.
+  - All provider methods wrapped in try-catch for network resilience (50x, network failures).
+  - Created `CatalogService` registry (Deezer primary, Mock fallback) with automatic fallback chain.
+  - Added catalog API endpoints: `GET /catalog/search?q=`, `GET /catalog/track/:id`, `GET /catalog/providers`.
+  - Wrote 13 tests for Deezer provider (mocked fetch): search, getTrack, preview URLs, error handling, chart.
+  - Wrote 7 tests for CatalogService: provider listing, named access, Deezer→Mock fallback routing.
+  - Rewrote `AudioPlayer` component from stub to fully functional player:
+    - Play/pause toggle with real HTML5 Audio API.
+    - Animated progress bar with click-to-seek navigation.
+    - Play/pause/error SVG icons with glow effects.
+    - Error state display when preview unavailable.
+    - Connected to GameScreen via `previewUrl`, `songTitle`, `artistName` props.
+  - All 52 tests passing (28 existing + 13 Deezer + 7 CatalogService + 4 old).
+- 2026-06-21 (continued): E2E Game Flow — HTTP REST Architecture.
+  - **Problem:** Vite WS proxy is incompatible with Durable Object WebSockets (ECONNRESET), causing "Karte ziehen" to hang after first call and guess submission to fail silently.
+  - **Solution:** Replaced WebSocket-based game commands with synchronous HTTP REST endpoints.
+  - Added HTTP `/command` endpoint to MatchRoom DO (receives POST, executes command, returns state).
+  - Added HTTP `/state` GET endpoint to MatchRoom DO.
+  - Added REST routes: `POST /games/:code/start`, `POST /games/:code/draw`, `POST /games/:code/guess`, `GET /games/:code/state`.
+  - Rewrote GameScreen to use HTTP `api.startMatch()`, `api.drawCard()`, `api.submitGuess()` instead of WS `wsSend()`.
+  - Removed `useWebSocket` dependency from GameScreen entirely.
+  - Removed `React.StrictMode` from main.tsx (was causing double WS connections).
+  - Added `sendToDO()` helper for proxying HTTP requests to the Durable Object.
+  - Lobby creation → start match → draw card → submit guess now works via reliable HTTP round-trips.
+  - Removed `intentionalCloseRef` and WS queue logic from useWebSocket (no longer needed for game flow).
+  - Clean restart required: `taskkill /f /im node.exe` then `npx wrangler dev` + `npx vite`.
+- 2026-06-23: MatchRoom DO unit tests — 20 comprehensive tests.
+  - **Problem:** Existing test file was broken (12 failures) — wrong API shape assumptions, plain object WebSocket mocks lacking `addEventListener`.
+  - **Solution:** Rewrote `match-room.test.ts` from scratch:
+    - `MockWebSocket` class with real `addEventListener`/`send` for WS simulation.
+    - Scoring service mocked for deterministic results.
+    - Direct `handleCommand()` and `fetch()` testing via HTTP.
+    - Helper `cmd()` for concise `POST /command` round-trips.
+  - **Coverage (20 tests):**
+    - **HTTP routing (5 tests):** GET /state (200/404), POST /command, legacy GET.
+    - **handleCommand (1 test):** UNKNOWN_COMMAND rejection.
+    - **startMatch (8 tests):** NO_PLAYERS (empty/missing), state setup, defaults, deck size, idempotency, seededDeck.
+    - **drawCard (3 tests):** NO_MATCH, phase transition, DECK_EMPTY.
+    - **submitGuess (6 tests):** NO_ACTIVE_CARD, PLAYER_NOT_FOUND, score/hand update, player advancement, round advancement, game-over detection.
+    - **endMatch (2 tests):** NO_MATCH, phase→finished.
+    - **version (1 test):** monotonic increment.
+  - **Result:** All 72 tests passing across 6 test suites (lobby 12, scoring 8, category 6, catalog 7, deezer 11, match-room 20).
+- 2026-06-27: Game navigation bugfix + UX + mobile responsive.
+  - **Bugfix:** `ResultScreen` navigated to hardcoded `/game/ABCD` instead of the actual game code.
+    - Added `gameCode` to `ResultState` interface and `navigate()` state.
+    - `GameScreen` now restores players/round/index from `location.state` instead of re-fetching lobby (which reset scores to 0).
+  - **UX-Fix:** `AudioPlayer` no longer receives `songTitle`/`artistName` during guessing phase (was revealing the answer).
+  - **Mobile Responsive:**
+    - Global CSS: responsive utilities (`.grid-2`, `.container`, `.card`, `.btn-primary`, `.text-input`), mobile breakpoints for Timeline and font sizes.
+    - GameScreen: `clamp()` for card height/fonts/padding, responsive input grid, flex-wrap top bar.
+    - ResultScreen: responsive score display (`clamp(3rem, 12vw, 4.5rem)`), flex-wrap top bar.
+    - FinalScreen: `clamp()` for all heading/rank/avatar sizes, text-overflow ellipsis for long names.
+- 2026-06-27: Jamendo API adapter.
+  - Implemented `JamendoCatalogProvider` with searchTracks, getTrack, getPreviewUrl.
+  - Genre mapping from Jamendo→internal normalized genres (Rock, HipHop, Electronic, etc.).
+  - Added `JAMENDO_CLIENT_ID` to Env bindings and wrangler.toml.
+  - CatalogService conditionally registers Jamendo provider when client ID is configured.
+  - Wrote 10 tests for Jamendo provider: search, getTrack, preview URLs, error handling, genre mapping.
+  - **Result:** All 82 tests passing across 7 test suites (lobby 12, scoring 8, category 6, catalog 7, deezer 11, match-room 20, jamendo 10).
