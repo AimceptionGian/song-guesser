@@ -1,0 +1,22 @@
+name = "song-guesser-api"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+
+[[durable_objects.bindings]]
+name = "MATCH_ROOM"
+class_name = "MatchRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MatchRoom"]
+
+[vars]
+JAMENDO_CLIENT_ID = ""
+SPOTIFY_CLIENT_ID = ""
+SPOTIFY_CLIENT_SECRET = ""
+MONGODB_API_URL = ""
+MONGODB_API_KEY = ""
+MONGODB_DATABASE = ""
+MONGODB_LOBBY_COLLECTION = ""
+MONGODB_SESSION_COLLECTION = ""
+MONGODB_MATCH_COLLECTION = ""

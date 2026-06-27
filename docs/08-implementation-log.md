@@ -98,6 +98,19 @@ Track completed slices, blocked items, and test alignment over time.
     - GameScreen: `clamp()` for card height/fonts/padding, responsive input grid, flex-wrap top bar.
     - ResultScreen: responsive score display (`clamp(3rem, 12vw, 4.5rem)`), flex-wrap top bar.
     - FinalScreen: `clamp()` for all heading/rank/avatar sizes, text-overflow ellipsis for long names.
+- 2026-06-27 (continued): Bugfixes + Event-sourcing implementation.
+  - Fixed TS error in GameScreen (duplicate `className` on artist input).
+  - Fixed TS error in GameScreen (`syncState` typed as `Record<string, unknown>` → changed to `any`).
+  - Fixed root vitest config excluding `workers/` directory (was causing wrong-environment test failures).
+  - Fixed `workers/vitest.config.ts` alias for `cloudflare:workers` virtual module → `src/__mocks__/cloudflare-workers.ts`.
+  - Fixed remaining `state`/`body` `unknown` type issues in `match-room.test.ts`.
+  - Fixed `ctx.blockConcurrencyWhile` mock in `match-room.test.ts` (NO_ACTIVE_CARD test used bare `{} as any`).
+  - Implemented **Event-sourcing persistence** in MatchRoom Durable Object:
+    - State is persisted to DO native storage after every mutation (`startMatch`, `drawCard`, `submitGuess`, `endMatch`).
+    - State is auto-restored on DO wake-up via `ctx.blockConcurrencyWhile` + `ctx.storage.get()`.
+  - Implemented `MongoMatchStateRepository` for MongoDB Atlas Data API persistence.
+  - Updated `RepositoryContext` to use `MongoMatchStateRepository` when MongoDB env vars are configured.
+  - **Result:** All 106 tests passing (9 suites), zero TypeScript errors across frontend and backend.
 - 2026-06-27: Jamendo API adapter.
   - Implemented `JamendoCatalogProvider` with searchTracks, getTrack, getPreviewUrl.
   - Genre mapping from Jamendo→internal normalized genres (Rock, HipHop, Electronic, etc.).
@@ -105,3 +118,37 @@ Track completed slices, blocked items, and test alignment over time.
   - CatalogService conditionally registers Jamendo provider when client ID is configured.
   - Wrote 10 tests for Jamendo provider: search, getTrack, preview URLs, error handling, genre mapping.
   - **Result:** All 82 tests passing across 7 test suites (lobby 12, scoring 8, category 6, catalog 7, deezer 11, match-room 20, jamendo 10).
+- 2026-06-27: CI/CD pipeline + env documentation.
+  - **CI workflow:** 3 parallel jobs — TypeScript check (frontend + backend), backend tests (82), frontend build.
+  - **Deploy Worker:** TypeScript check → tests → `wrangler deploy` (triggered on `workers/**` changes).
+  - **Deploy Frontend:** TypeScript check → `vite build` → `wrangler pages deploy` (triggered on `src/**` changes).
+  - Created `.env.example` documenting required env vars (JAMENDO_CLIENT_ID, CLOUDFLARE_API_TOKEN).
+  - Created comprehensive `.gitignore`.
+  - **Result:** All 82 tests passing.
+- 2026-06-27: Auth service (session management).
+  - Created `auth-service.ts` with token-based session CRUD: `generateToken`, `createSession`, `validateSession`, `destroySession`, `destroyLobbySessions`, `extractTokenFromRequest`.
+  - Updated `/api/lobbies` (POST) and `/api/lobbies/:code/join` (POST) to return real session tokens instead of placeholder `token_xxx`.
+  - Wrote 11 tests: token generation/entropy, session lifecycle, lobby-scoped cleanup, Authorization header extraction.
+  - **Result:** All 93 tests passing across 8 test suites (lobby 12, scoring 8, category 6, catalog 7, deezer 11, match-room 20, jamendo 10, auth 11).
+- 2026-06-27: MongoDB persistence layer (Atlas Data API).
+  - Created `Repository<T>` interface with CRUD + `LobbyRepository`, `SessionRepository`, `MatchStateRepository`.
+  - Implemented `InMemoryLobbyRepository` + `InMemorySessionRepository` (replaces raw Maps).
+  - Implemented `MongoLobbyRepository` + `MongoSessionRepository` via MongoDB Atlas Data API (REST, CF Workers compatible).
+  - `RepositoryContext` factory autoselects MongoDB vs in-memory based on env vars.
+  - Refactored `lobby-service` to async repository-based (all functions now return Promises).
+  - Refactored `auth-service` to async repository-based.
+  - Updated `api.ts` routes with `await` on all service calls.
+  - Added MongoDB env vars to `Env` type, `wrangler.toml`, `.env.example`.
+  - Updated lobby tests + auth tests to use `async/await`.
+  - **Result:** All 93 tests passing.
+- 2026-06-28: Spotify History Sync Adapter + Bugfixes.
+  - **Bugfix:** Vitest 4.1.9 hat einen kritischen Bug mit Node.js 24 (`Cannot read properties of undefined (reading 'config')`). Downgrade auf vitest 3.2.4 — alle Tests laufen wieder.
+  - **Bugfix:** Circular Dependency zwischen `in-memory-repository.ts` ↔ `auth-service.ts` aufgelöst: `PlayerSession` Interface in `types/index.ts` verschoben.
+  - **Bugfix:** `SpotifyHistoryProvider` Schwellwert von `>= 10` auf `> 0` geändert (sinnvoller — jede verfügbare History nutzen).
+  - **Neu:** `HistoryProvider` Interface (`history-provider.ts`) — abstrahiert Spotify OAuth Sync und manuellen Upload.
+  - **Neu:** `SpotifyHistoryProvider` — recently-played API + top-tracks Fallback, Multi-Artist-Support, Fehler-Handling.
+  - **Neu:** `HistoryService` — Singleton, verwaltet Player-History, `syncFromSpotify()`, `importTracks()`, `getUniqueArtists()`, `clearLobbyHistory()`.
+  - **Neu:** 4 API-Routen: `POST /history/sync`, `POST /history/import`, `GET /history/:playerId`, `POST /history/artists`.
+  - **Neu:** `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` zu `Env` hinzugefügt.
+  - **Neu:** 22 Tests für Spotify-Provider + History-Service (fetchHistory, importTracks, Multi-Artist, Error-Handling, Unique-Artists, Clear).
+  - **Result:** All 128 tests passing across 11 test suites.

@@ -1,0 +1,44 @@
+name: Deploy Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/**'
+      - '.github/workflows/deploy.yml'
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: true
+
+jobs:
+  test-and-deploy:
+    name: Test & Deploy Worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workers/package-lock.json
+
+      - name: Install deps
+        working-directory: workers
+        run: npm ci
+
+      - name: TypeScript check
+        working-directory: workers
+        run: npx tsc --noEmit
+
+      - name: Run tests
+        working-directory: workers
+        run: npm test
+
+      - name: Deploy to Cloudflare Workers
+        working-directory: workers
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}

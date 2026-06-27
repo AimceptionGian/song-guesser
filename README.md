@@ -1,73 +1,205 @@
-# Multi-Agent Project Base Template
+# 🎵 Beat Timeline — SongGuesser
 
-Clone this repository as a starting point for new web-app projects.
+**Rate Songs auf einer interaktiven Timeline.** Ziehe Karten, höre Preview-Clips, rate Interpret, Titel und Erscheinungsjahr — und sammle Punkte gegen deine Freunde.
 
-## What this template provides
-- Workspace-level Copilot customization in `.github/`
-- Specialized agent definitions for idea, stack, architecture, design, docs, tests, and implementation
-- Standardized phase artifacts in `docs/`
-- A user-controlled early workflow and a gated test/implementation overlap
+![CI](https://github.com/GianLuetti/song-guesser/actions/workflows/ci.yml/badge.svg)
+![Deploy Worker](https://github.com/GianLuetti/song-guesser/actions/workflows/deploy.yml/badge.svg)
+![Deploy Frontend](https://github.com/GianLuetti/song-guesser/actions/workflows/deploy-frontend.yml/badge.svg)
 
-## Agent set
-1. Idea Agent
-2. Stack Selection Agent
-3. Architecture Agent
-4. UI UX Agent
-5. Visual Branding Agent
-6. Documentation Agent
-7. Test Strategy Authoring Agent
-8. Implementation Agent
-9. Optional Orchestrator Agent
+---
 
-## Workflow model
-### User-controlled phases
-You manually trigger and review these phases:
-1. Idea
-2. Stack Selection
-3. Architecture
-4. UI UX
-5. Visual Branding
+## ✨ Features
 
-Documentation Agent then runs automatically after each completed phase as a synchronization step.
+| Feature | Status |
+|---------|--------|
+| 🎮 Lobby-System mit 4-stelligem Game-Code | ✅ |
+| 🃏 Karten ziehen + auf Timeline platzieren | ✅ |
+| 🎤 Interpret & Titel raten | ✅ |
+| 📅 Jahres-Schätzung mit Punkte-System | ✅ |
+| 🎵 Deezer 30s Preview-Player | ✅ |
+| 🏆 Punktetafel + Final-Ranking | ✅ |
+| 📱 Voll responsive (Mobile + Desktop) | ✅ |
+| 🔐 Token-basiertes Session-Management | ✅ |
+| 📜 Spotify-History-Sync (optional) | ✅ |
+| 📤 Upload-Import für Play-History | ✅ |
+| 💾 MongoDB Persistence (optional) | ✅ |
 
-### Coordinated phases
-- Test Strategy Authoring Agent creates incremental test packages.
-- Implementation Agent starts only after `docs/07a-test-package-1.md` is approved.
-- Then testing and implementation continue in parallel.
+---
 
-## TBD handling
-- `TBD` values are placeholders in templates and are expected at project start.
-- Agents replace `TBD` fields as soon as enough upstream inputs exist.
-- If data is still missing, the agent keeps `TBD` and documents the missing input under Open Questions.
+## 🧱 Tech Stack
 
-## Handover contract
-Each phase artifact in `docs/` must include:
-- Goal
-- Inputs
-- Decisions
-- Risks
-- Open Questions
-- Status
+| Layer | Technologie |
+|-------|------------|
+| **Frontend** | React 18 · TypeScript · Vite · React Router 6 |
+| **Backend** | Cloudflare Workers · Hono · Durable Objects |
+| **Testing** | Vitest 3 · Testing Library · jsdom |
+| **CI/CD** | GitHub Actions · Cloudflare Pages + Workers |
+| **APIs** | Deezer (Preview-Clips) · Jamendo (Fallback) · Spotify (History) |
+| **DB** | In-Memory (dev) · MongoDB Atlas Data API (prod) |
 
-Allowed status values:
-- `draft`
-- `in-review`
-- `approved`
-- `superseded`
+---
 
-## Project structure
-- `.github/copilot-instructions.md`: global rules
-- `.github/AGENTS.md`: workflow registry
-- `.github/agents/*.agent.md`: specialized agent definitions
-- `.github/instructions/*.instructions.md`: file-scoped instructions
-- `.github/prompts/*.prompt.md`: reusable prompts
-- `.github/skills/*/SKILL.md`: reusable workflow skills
-- `docs/*.md`: phase outputs and project docs
+## 🚀 Lokale Entwicklung
 
-## First run
-1. Fill `docs/01-idea.md` with your project concept.
-2. Trigger stack selection and approve `docs/02-stack-selection.md`.
-3. Continue through architecture and design files.
-4. Let documentation phase align project-level docs.
-5. Start testing phase and approve `docs/07a-test-package-1.md`.
-6. Start implementation phase.
+### Voraussetzungen
+
+- Node.js 22+
+- npm
+- (Optional) [Cloudflare API Token](https://dash.cloudflare.com/profile/api-tokens)
+
+### Setup
+
+```bash
+# 1. Repository klonen
+git clone https://github.com/AimceptionGian/song-guesser.git
+cd song-guesser
+
+# 2. Frontend-Dependencies installieren
+npm install
+
+# 3. Backend-Dependencies installieren
+cd workers
+npm install
+cd ..
+
+# 4. (Optional) Environment-Variablen setzen
+cp .env.example .env
+# Bearbeite .env nach Bedarf (JAMENDO_CLIENT_ID für echte Tracks)
+```
+
+### Development starten
+
+**Terminal 1 — Backend (Cloudflare Workers):**
+```bash
+cd workers
+npx wrangler dev
+```
+
+**Terminal 2 — Frontend (Vite Dev Server):**
+```bash
+npm run dev
+```
+
+Dann im Browser öffnen: `http://localhost:3000`
+
+### Nützliche Befehle
+
+```bash
+npm run dev          # Frontend-Dev-Server (Port 3000)
+npm run build        # Frontend-Build
+npm test             # Frontend-Tests
+npx tsc --noEmit     # Frontend-TypeScript-Check
+
+cd workers
+npx wrangler dev     # Backend-Dev-Server (Port 8787)
+npm test             # Backend-Tests (128 Tests / 11 Suiten)
+npx tsc --noEmit     # Backend-TypeScript-Check
+```
+
+---
+
+## 🏗️ Projekt-Struktur
+
+```
+song-guesser/
+├── .github/workflows/   # CI/CD (ci.yml, deploy.yml, deploy-frontend.yml)
+├── docs/                # Architektur-Dokumente, ADRs, WiPs
+├── src/                 # React SPA
+│   ├── components/      # Timeline, AudioPlayer, Scoreboard, etc.
+│   ├── screens/         # LobbyScreen, GameScreen, ResultScreen, FinalScreen
+│   ├── services/        # API Client
+│   ├── hooks/           # useWebSocket
+│   ├── styles/          # global.css
+│   └── types/           # TypeScript Interfaces
+├── workers/             # Cloudflare Worker API
+│   ├── src/
+│   │   ├── adapters/    # Deezer-, Jamendo-, Spotify-Adapter
+│   │   ├── db/          # Repository-Interface, InMemory-, MongoDB-Impl.
+│   │   ├── durable-objects/  # MatchRoom DO (Game State Machine)
+│   │   ├── routes/      # Hono API Routes (lobbies, games, history, catalog)
+│   │   ├── services/    # Scoring, Lobby, Category, Auth, History, Catalog
+│   │   └── types/       # Worker TypeScript Interfaces
+│   └── wrangler.toml    # Worker-Konfiguration
+├── .env.example         # Alle benötigten Environment-Variablen
+└── vite.config.ts       # Vite-Konfiguration (API-Proxy → :8787)
+```
+
+---
+
+## 🌍 Deployment
+
+Die App deployt **automatisch via GitHub Actions** bei Push auf `main`.
+
+| Komponente | Pipeline | Trigger |
+|-----------|----------|---------|
+| **API Worker** | `deploy.yml` | Änderungen an `workers/**` |
+| **Frontend (Pages)** | `deploy-frontend.yml` | Änderungen an `src/**` |
+| **CI (Tests + Types)** | `ci.yml` | Push/PR auf `main`/`dev` |
+
+### Manuelles Deployment
+
+```bash
+# Worker deployen
+cd workers && npx wrangler deploy
+
+# Frontend deployen
+npm run build
+npx wrangler pages deploy dist/
+```
+
+### Secrets (GitHub → Actions → Secrets)
+
+| Secret | Beschreibung |
+|--------|-------------|
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API Token (Deployment) |
+| `JAMENDO_CLIENT_ID` | Jamendo API Client ID |
+| `SPOTIFY_CLIENT_ID` | Spotify App Client ID (History) |
+| `SPOTIFY_CLIENT_SECRET` | Spotify App Client Secret |
+
+---
+
+## 🧪 Tests
+
+```
+✓ 11 Test Suites  |  128 Tests passed
+✓ 0 TypeScript-Fehler
+```
+
+- **Backend:** Unit-Tests für alle Services (Scoring, Lobby, Category, Auth, Catalog + alle Adapter + MatchRoom DO)
+- **Frontend:** (geplant — @testing-library/react)
+
+Detail: `docs/TESTING.md`
+
+---
+
+## 🔑 Environment-Variablen
+
+| Variable | Pflicht | Beschreibung |
+|----------|---------|-------------|
+| `JAMENDO_CLIENT_ID` | Nein | Katalog-Fallback (echte Preview-Tracks) |
+| `SPOTIFY_CLIENT_ID` | Nein | Spotify OAuth für History-Sync |
+| `SPOTIFY_CLIENT_SECRET` | Nein | Spotify OAuth Secret |
+| `MONGODB_API_URL` | Nein | MongoDB Atlas Data API URL |
+| `MONGODB_API_KEY` | Nein | MongoDB Data API Key |
+| `MONGODB_DATABASE` | Nein | MongoDB Datenbank-Name |
+| `CLOUDFLARE_API_TOKEN` | Ja (Deploy) | Cloudflare Deployment Token |
+
+---
+
+## 📚 Dokumentation
+
+| Dokument | Inhalt |
+|----------|--------|
+| `docs/01-idea.md` | Ursprüngliches Konzept |
+| `docs/03-architecture.md` | System-Architektur |
+| `docs/04-ui-ux.md` | Wireframes & UX Flow |
+| `docs/architecture-game-engine.md` | Game Engine Deep-Dive |
+| `docs/TESTING.md` | Test-Strategie & Status |
+| `docs/DECISIONS.md` | Architektur-Entscheidungen (ADRs) |
+| `docs/CONTRIBUTING.md` | Contribution Guidelines |
+
+---
+
+## 📄 Lizenz
+
+MIT © GianLuetti

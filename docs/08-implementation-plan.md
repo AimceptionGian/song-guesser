@@ -57,8 +57,15 @@ Plan and track implementation slices aligned with approved test packages.
 - [x] Jamendo API adapter (secondary provider) — search, getTrack, preview URLs, genre mapping
 
 ### 💾 Persistence
-- [ ] MongoDB Atlas Free integration (repository layer)
-- [ ] Event-sourcing from MatchRoom to DB
+- [x] MongoDB Atlas Free integration (repository layer via Data API)
+- [x] Repository interfaces: LobbyRepository, SessionRepository, MatchStateRepository
+- [x] In-memory repositories (dev/testing default)
+- [x] MongoDB repositories (via Atlas Data API REST — CF Workers compatible)
+- [x] RepositoryContext factory (autoselect MongoDB vs in-memory based on env)
+- [x] Service layer migrated to async repository pattern
+- [x] Event-sourcing from MatchRoom to DB — DO storage persistence after every mutation
+- [x] MongoMatchStateRepository for MongoDB match state persistence
+- [x] MatchRoom state recovery on wake-up via `ctx.storage.get()`
 
 ### 🎨 Frontend Polish
 - [x] AudioPlayer: full HTML5 Audio API with play/pause, progress bar, seek, error handling
@@ -67,18 +74,25 @@ Plan and track implementation slices aligned with approved test packages.
 - [x] Mobile responsive verification (clamp(), responsive grids, breakpoints, touch-friendly Timeline)
 
 ### 🔐 Auth & History
-- [ ] Auth service (session management, tokens)
-- [ ] Spotify history sync adapter
-- [ ] Upload-import fallback
+- [x] Auth service (session management, tokens) — token-based PlayerSession CRUD, Authorization header extraction
+- [x] Spotify history sync adapter — SpotifyHistoryProvider (recently-played + top-tracks fallback), HistoryService, 4 API routes
+- [x] Upload-import fallback — `POST /history/import` accepts manual track uploads as player history
 
 ### 🚀 DevOps
-- [ ] CI/CD pipeline (GitHub Actions)
+- [x] CI/CD pipeline (GitHub Actions) — CI (lint, typecheck, test, build) + Deploy Worker + Deploy Frontend
+- [x] **wrangler.toml** — alle Env-Vars in `[vars]`, compatibility_date auf 2026-06-01
+- [x] **vite.config.ts** — Production-Build config (`base: '/'`, `sourcemap: false`)
+- [x] **CI Workflows** — Node 22 statt 20
+- [x] **Root vitest** — downgrade auf 3.2.4 (Node 24 Kompatibilität)
+- [x] **`.env.example`** — alle 10 Env-Vars dokumentiert
+- [x] **`README.md`** — vollständige Projektdoku (Setup, Deployment, Env-Vars, Tests)
 - [ ] Environment segregation (dev/staging/prod)
 - [ ] Secrets management
 
 ## Risks
 - Scope creep
-- No test package approval gate passed yet
+- Spotify Policy: "Trivia quizzes" nicht erlaubt → non-Spotify-Architektur als Primärpfad
+- Vitest 4.x inkompatibel mit Node 24 → auf 3.x ausgewichen
 
 ## Open Questions
 - Test Package 1 not yet approved — implementation started without it as agreed

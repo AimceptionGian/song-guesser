@@ -1,24 +1,31 @@
 # Testing
 
 ## Scope
-- Unit tests for backend services (scoring, lobby, category)
-- Unit tests for frontend components (screens, components, hooks)
+- Unit tests for backend services (scoring, lobby, category, auth, catalog, history)
+- Unit tests for all adapter providers (Deezer, Jamendo, Spotify, Mock)
+- Unit tests for MatchRoom Durable Object (state machine, HTTP routing, version tracking)
 - Integration tests for API routes and WebSocket game flow
 - End-to-end validation via MatchRoom Durable Object
 
 ## Framework
-- **Vitest v4** — test runner for both frontend and backend
+- **Vitest v3** — test runner for both frontend and backend
 - **@testing-library/react** — component tests (frontend)
 - **jsdom** — browser environment simulation (frontend)
 
 ## Strategy
 
 ### Backend Unit Tests (`workers/`)
-- `scoring-service.test.ts` — Points calculation, case-insensitivity, year penalty clamping
-- `lobby-service.test.ts` — CRUD operations, player limits, code generation uniqueness, cleanup
-- `category-service.test.ts` — Category filtering by history access, eligibility validation
-- Future: MatchRoom DO state machine tests (start, draw, guess, end)
-- Future: API route tests (lobby endpoints, error responses)
+- `scoring-service.test.ts` — Points calculation, case-insensitivity, year penalty clamping (9 tests)
+- `lobby-service.test.ts` — CRUD operations, player limits, code generation uniqueness, cleanup (13 tests)
+- `category-service.test.ts` — Category filtering by history access, eligibility validation (6 tests)
+- `auth-service.test.ts` — Token generation entropy, session lifecycle, Authorization header parsing (11 tests)
+- `catalog-service.test.ts` — Provider registry, fallback chaining, mock routing (7 tests)
+- `deezer-catalog-provider.test.ts` — Search, getTrack, preview URLs, error handling, chart endpoints (10 tests)
+- `jamendo-catalog-provider.test.ts` — Search, getTrack, preview URLs, error handling, genre mapping (10 tests)
+- `spotify-history-provider.test.ts` — Recently-played, top-tracks fallback, API errors, multi-artist, import (10 tests)
+- `history-service.test.ts` — Provider listing, Spotify sync, track import, unique artists/track IDs, clear (12 tests)
+- `in-memory-repository.test.ts` — Lobby + Session repository CRUD (13 tests)
+- `match-room.test.ts` — HTTP routing, start/draw/guess/end lifecycle, version tracking, WebSocket upgrade (27 tests)
 
 ### Frontend Tests (`src/`)
 - Component rendering and interaction tests
@@ -44,13 +51,19 @@ npm run test:watch
 
 ## Execution
 
-| Area | Status | Notes |
+| Area | Status | Tests |
 |------|--------|-------|
-| Backend scoring service | ✅ 9 tests | All passing |
-| Backend lobby service | ✅ 12 tests | All passing |
-| Backend category service | ✅ 8 tests | All passing |
-| Deezer catalog provider | ✅ 13 tests | All passing (mocked fetch) |
-| Catalog service registry | ✅ 7 tests | All passing (fallback chain) |
+| Backend scoring service | ✅ | 9 |
+| Backend lobby service | ✅ | 13 |
+| Backend category service | ✅ | 6 |
+| Backend auth service | ✅ | 11 |
+| Catalog service registry | ✅ | 7 |
+| Deezer catalog provider | ✅ | 10 |
+| Jamendo catalog provider | ✅ | 10 |
+| Spotify history provider | ✅ | 10 |
+| History service | ✅ | 12 |
+| In-memory repositories | ✅ | 13 |
+| MatchRoom Durable Object | ✅ | 27 |
 | Frontend components | ❌ Not started | Pending |
-| Integration flow | ❌ Not started | Pending |
-| MatchRoom DO | ❌ Not started | Needs DO runtime mocking |
+| Integration / E2E | ❌ Not started | Pending |
+| **Total** | **11 suites** | **128 tests** |
