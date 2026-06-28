@@ -15,7 +15,7 @@
 ## Strategy
 
 ### Backend Unit Tests (`workers/`)
-- `scoring-service.test.ts` — Points calculation, case-insensitivity, year penalty clamping (9 tests)
+- `scoring-service.test.ts` — 4×1-Punktesystem: Artist, Title, Exact Year, Timeline Bucket (12 Tests)
 - `lobby-service.test.ts` — CRUD operations, player limits, code generation uniqueness, cleanup (13 tests)
 - `category-service.test.ts` — Category filtering by history access, eligibility validation (6 tests)
 - `auth-service.test.ts` — Token generation entropy, session lifecycle, Authorization header parsing (11 tests)

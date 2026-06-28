@@ -120,6 +120,8 @@ export interface ScoreResult {
   artistCorrect: boolean;
   titleCorrect: boolean;
   yearDiff: number;
+  yearExact: boolean;
+  timelineCorrect: boolean;
   breakdown: ScoreBreakdown;
 }
 
@@ -127,6 +129,7 @@ export interface ScoreBreakdown {
   artistPoints: number;
   titlePoints: number;
   yearPoints: number;
+  timelinePoints: number;
 }
 
 // ─── Category ───

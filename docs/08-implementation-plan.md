@@ -35,8 +35,20 @@ Plan and track implementation slices aligned with approved test packages.
 
 ## Remaining work
 
-### 🐛 Bugfixes
+### 🐛 Bugfixes (nach Deployment entdeckt) ✅ ALLE BEHOBEN (2026-06-28)
 - [x] Fix `calculateScore()` — removed dead code (was comparing against empty strings)
+- [x] **#1 Lobby-Flow korrigieren** — `handleCreateGame()` navigiert nicht mehr direkt zu `/game/:code`. LobbyScreen zeigt nach Erstellen den Code + wartende Spieler (Polling alle 2s). Host kann Spiel starten.
+- [x] **#2 Punkte-System umbauen** — Neues 4×1-System implementiert:
+  - 1 Punkt: Karte RICHTIG in Timeline eingeordnet (vor/nach bestehenden Karten aus früheren Runden)
+  - 1 Punkt: Exaktes Jahr getroffen
+  - 1 Punkt: Interpret richtig
+  - 1 Punkt: Titel richtig
+  - Altes `calculateFullScore()` mit 150/150/200 + Jahr-Abzug wurde durch neues System ersetzt
+  - Backend `calculateFullScore()` + Frontend `handleSubmit()` umgestellt
+  - Tests komplett neu geschrieben (12 Tests für das 4×1-System)
+- [x] **#3 Song-Snippets abspielbar machen** — `previewUrl` in alle 15 Mock-Tracks eingefügt (echte Deezer-Preview-URLs)
+- [x] **#4 Platzierte Karten auf Timeline anzeigen** — Timeline rendert Mini-Karten mit Emoji, Titel, Stem-Line und Dot (V7-Wireframe-Design). `placedCards` werden nach Navigation via Player-State korrekt wiederhergestellt.
+- [x] **#5 Lobby-Einstellungen UI** — Lobby-Warteraum mit Spielerliste; Host kann Spiel starten. Lobby-Settings werden im Wartezimmer angezeigt.
 
 ### 🔧 Infrastructure
 - [x] Install Vitest and set up test infrastructure (frontend + backend)
@@ -100,3 +112,6 @@ Plan and track implementation slices aligned with approved test packages.
 
 ## Status
 in-progress
+
+---
+*Letzte Aktualisierung: 2026-06-28 — 5 Bugfix-Einträge (#1–#5) nach Deployment-Review hinzugefügt.*

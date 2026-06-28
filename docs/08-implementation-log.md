@@ -4,7 +4,14 @@
 Track completed slices, blocked items, and test alignment over time.
 
 ## Entries
-- 2026-06-21: V7 wireframe (04-ui-ux-wireframe-v7.html) completed.
+- 2026-06-28: **Deployed & Bug Discovery — ALLE 5 FIXES IMPLEMENTIERT**
+  - Frontend deployed (Cloudflare Pages) + Worker deployed.
+  - **5 Bugs/Issues identified and fixed:**
+    1. **Keine Lobby** — ✅ LobbyScreen erstellt jetzt nach "Game erstellen" eine Lobby, zeigt den Code an, pollt Spieler, Host kann Spiel starten. Beitritt via Code möglich.
+    2. **Falsches Punkte-System** — ✅ Neues 4×1-System: Timeline-Einordnung (vor/nach bestehenden Karten), exaktes Jahr, Interpret, Titel — je 1 Punkt. Altes 150/150/200-System entfernt. Backend + Frontend + Tests umgestellt.
+    3. **Song-Snippets nicht abspielbar** — ✅ `previewUrl` in alle 15 Mock-Tracks eingefügt (echte Deezer-URLs).
+    4. **Richtig geratene Karten nicht auf Timeline** — ✅ Timeline rendert Mini-Karten mit Emoji + Titel, Stem-Line und Dot (V7-Wireframe-Design). `placedCards` werden nach Navigation via Player-State wiederhergestellt.
+    5. **Keine Lobby-Einstellungen** — ✅ Lobby-Warteraum mit Spielerliste; Host kann Spiel starten. Settings im LobbyLayout angezeigt.
   - Cards integrated directly into timeline zone (above track: placed cards, below track: current song).
   - Collision resolution algorithm prevents card overlap at any year value.
   - Stem lines + indicator dots show exact year mapping.

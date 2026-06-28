@@ -10,8 +10,15 @@ interface TimelineProps {
   maxYear: number;
   value: number;
   onChange: (year: number) => void;
-  placedCards?: { year: number; isCorrect: boolean }[];
+  placedCards?: PlacedCardInfo[];
   currentDotYear?: number;
+}
+
+export interface PlacedCardInfo {
+  year: number;
+  isCorrect: boolean;
+  emoji?: string;
+  title?: string;
 }
 
 export default function Timeline({
@@ -104,11 +111,11 @@ export default function Timeline({
         </span>
       </div>
 
-      {/* Placed cards above the track */}
+      {/* Placed cards above the track — V7 wireframe style */}
       <div
         style={{
           position: 'relative',
-          height: placedCards.length > 0 ? 100 : 10,
+          height: placedCards.length > 0 ? 90 : 10,
           marginBottom: 0,
         }}
       >
@@ -122,16 +129,73 @@ export default function Timeline({
                 left: `${left}%`,
                 transform: 'translateX(-50%)',
                 bottom: 0,
-                width: 10,
-                height: 10,
-                borderRadius: '50%',
-                background: card.isCorrect ? '#06d6a0' : '#a855f7',
-                boxShadow: card.isCorrect
-                  ? '0 0 6px rgba(6,214,160,0.5)'
-                  : '0 0 6px rgba(168,85,247,0.5)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
                 zIndex: 2,
               }}
-            />
+            >
+              {/* Mini card */}
+              <div
+                style={{
+                  width: 52,
+                  borderRadius: 8,
+                  border: `1px solid ${card.isCorrect ? 'rgba(6,214,160,0.4)' : 'rgba(168,85,247,0.3)'}`,
+                  background: '#13121f',
+                  overflow: 'hidden',
+                  marginBottom: 2,
+                }}
+              >
+                <div
+                  style={{
+                    height: 28,
+                    display: 'grid',
+                    placeItems: 'center',
+                    background: card.isCorrect
+                      ? 'rgba(6,214,160,0.08)'
+                      : 'rgba(168,85,247,0.08)',
+                  }}
+                >
+                  <span style={{ fontSize: 14 }}>{card.emoji || '🎵'}</span>
+                </div>
+                {(card.title) && (
+                  <div style={{
+                    padding: '2px 4px',
+                    textAlign: 'center',
+                    fontSize: '0.5rem',
+                    color: '#f0eeff',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    lineHeight: 1.2,
+                  }}>
+                    {card.title}
+                  </div>
+                )}
+              </div>
+              {/* Stem line */}
+              <div
+                style={{
+                  width: 1,
+                  height: 8,
+                  background: card.isCorrect
+                    ? 'rgba(6,214,160,0.35)'
+                    : 'rgba(168,85,247,0.3)',
+                }}
+              />
+              {/* Dot on track */}
+              <div
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: card.isCorrect ? '#06d6a0' : '#a855f7',
+                  boxShadow: card.isCorrect
+                    ? '0 0 6px rgba(6,214,160,0.5)'
+                    : '0 0 6px rgba(168,85,247,0.5)',
+                }}
+              />
+            </div>
           );
         })}
       </div>

@@ -49,6 +49,15 @@ export class MatchRoom extends DurableObject {
       return new Response(null, { status: 101, webSocket: client });
     }
 
+    // HTTP init-deck endpoint (seeds the deck before start_match)
+    if (request.url.endsWith('/init-deck') && request.method === 'POST') {
+      const { deck } = (await request.json()) as { deck: Card[] };
+      if (deck && deck.length > 0) {
+        this.seededDeck = deck;
+      }
+      return Response.json({ accepted: true, count: deck?.length ?? 0 });
+    }
+
     // HTTP command endpoint (REST fallback for unreliable WS)
     if (request.url.endsWith('/command') && request.method === 'POST') {
       const raw = (await request.json()) as Record<string, unknown>;
@@ -235,12 +244,23 @@ export class MatchRoom extends DurableObject {
     const submission = command.payload as unknown as GuessSubmission;
     const card = this.state.currentCard;
 
-    const result = calculateFullScore(submission, card.artist, card.title, card.year);
-
     const playerIdx = this.state.players.findIndex((p) => p.id === submission.playerId);
     if (playerIdx === -1) {
       return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'PLAYER_NOT_FOUND' };
     }
+
+    // Gather correct years from already correctly placed cards
+    const existingCorrectYears = this.state.players[playerIdx].placedCards
+      .filter((pc) => pc.isCorrect)
+      .map((pc) => pc.card.year);
+
+    const result = calculateFullScore(
+      submission,
+      card.artist,
+      card.title,
+      card.year,
+      existingCorrectYears
+    );
 
     this.state.players[playerIdx] = {
       ...this.state.players[playerIdx],
@@ -248,7 +268,7 @@ export class MatchRoom extends DurableObject {
       hand: [...this.state.players[playerIdx].hand, card],
       placedCards: [
         ...this.state.players[playerIdx].placedCards,
-        { card, placedYear: submission.guessedYear, isCorrect: result.yearDiff <= 5 },
+        { card, placedYear: submission.guessedYear, isCorrect: result.timelineCorrect },
       ],
     };
 

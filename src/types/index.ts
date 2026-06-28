@@ -44,6 +44,8 @@ export interface RoundResult {
   artistCorrect: boolean;
   titleCorrect: boolean;
   yearDiff: number;
+  yearExact: boolean;
+  timelineCorrect: boolean;
   points: number;
 }
 

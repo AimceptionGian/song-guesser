@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import Timeline from '../components/Timeline';
+import type { PlacedCardInfo } from '../components/Timeline';
 import AudioPlayer from '../components/AudioPlayer';
 import Scoreboard from '../components/Scoreboard';
 import { MIN_YEAR, MAX_YEAR } from '../constants';
@@ -14,7 +15,7 @@ export default function GameScreen() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
   const [currentCard, setCurrentCard] = useState<Song | null>(null);
-  const [placedYears, setPlacedYears] = useState<{ year: number; isCorrect: boolean }[]>([]);
+  const [placedYears, setPlacedYears] = useState<PlacedCardInfo[]>([]);
   const [timelineYear, setTimelineYear] = useState(1992);
   const [artistInput, setArtistInput] = useState('');
   const [titleInput, setTitleInput] = useState('');
@@ -39,6 +40,16 @@ export default function GameScreen() {
       if (typeof incoming.currentPlayerIndex === 'number') setCurrentPlayerIndex(incoming.currentPlayerIndex);
       if (typeof incoming.round === 'number') setRound(incoming.round as number);
       setGameStarted(true);
+      // Restore placed cards from player state
+      const p = (incoming.players as Player[])[incoming.currentPlayerIndex as number || 0];
+      if (p?.placedCards) {
+        setPlacedYears(p.placedCards.map((pc) => ({
+          year: pc.placedYear,
+          isCorrect: pc.isCorrect,
+          emoji: pc.song.emoji,
+          title: pc.song.title,
+        })));
+      }
       return;
     }
 
@@ -94,7 +105,8 @@ export default function GameScreen() {
 
     try {
       if (!gameStarted) {
-        // Start match first, then draw
+        // Game was started via lobby — DO is already initialized with deck
+        // Just start the match via startMatch API, then draw
         const startRes = await api.startMatch(gameCode);
         if (startRes.state) syncState(startRes.state);
         setGameStarted(true);
@@ -122,10 +134,30 @@ export default function GameScreen() {
     setIsLoading(true);
     setError(null);
 
+    // New 4×1 scoring
     const artistCorrect = artistInput.trim().toLowerCase() === currentCard.artist.toLowerCase();
     const titleCorrect = titleInput.trim().toLowerCase() === currentCard.title.toLowerCase();
+    const yearExact = timelineYear === currentCard.year;
     const yearDiff = Math.abs(timelineYear - currentCard.year);
-    const points = (artistCorrect ? 150 : 0) + (titleCorrect ? 150 : 0) + Math.max(0, 200 - yearDiff * 5);
+
+    // Timeline bucket check: where does this fit relative to already placed correct cards?
+    const myPlayer = players[currentPlayerIndex];
+    const existingCorrectYears = myPlayer
+      ? myPlayer.placedCards.filter((pc) => pc.isCorrect).map((pc) => pc.song.year)
+      : [];
+
+    let timelineCorrect = false;
+    if (existingCorrectYears.length > 0) {
+      const sortedExisting = [...existingCorrectYears].sort((a, b) => a - b);
+      const correctBucket = getBucket(currentCard.year, sortedExisting);
+      const guessedBucket = getBucket(timelineYear, sortedExisting);
+      timelineCorrect = correctBucket === guessedBucket;
+    } else {
+      // First card: timeline point always earned if years match
+      timelineCorrect = timelineYear === currentCard.year;
+    }
+
+    const points = (artistCorrect ? 1 : 0) + (titleCorrect ? 1 : 0) + (yearExact ? 1 : 0) + (timelineCorrect ? 1 : 0);
 
     // Optimistic local update
     const updatedPlayers = [...players];
@@ -134,9 +166,15 @@ export default function GameScreen() {
       score: updatedPlayers[currentPlayerIndex].score + points,
       placedCards: [
         ...updatedPlayers[currentPlayerIndex].placedCards,
-        { song: currentCard, placedYear: timelineYear, isCorrect: yearDiff <= 5 },
+        { song: currentCard, placedYear: timelineYear, isCorrect: timelineCorrect },
       ],
     };
+    setPlacedYears((prev) => [...prev, {
+      year: timelineYear,
+      isCorrect: timelineCorrect,
+      emoji: currentCard.emoji,
+      title: currentCard.title,
+    }]);
     setPlacedYears((prev) => [...prev, { year: timelineYear, isCorrect: yearDiff <= 5 }]);
 
     try {
@@ -159,6 +197,8 @@ export default function GameScreen() {
         guessedYear: timelineYear,
         artistCorrect,
         titleCorrect,
+        yearExact,
+        timelineCorrect,
         yearDiff,
         points,
         players: updatedPlayers,
@@ -404,4 +444,15 @@ function InputGroup({ label, children }: { label: string; children: React.ReactN
       {children}
     </div>
   );
+}
+
+/**
+ * Determine which "bucket" a year falls into relative to sorted existing years.
+ * Returns the insertion index: 0 if before first, 1 between first and second, etc.
+ */
+function getBucket(year: number, sortedYears: number[]): number {
+  for (let i = 0; i < sortedYears.length; i++) {
+    if (year < sortedYears[i]) return i;
+  }
+  return sortedYears.length;
 }

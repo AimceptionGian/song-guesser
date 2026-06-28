@@ -202,4 +202,4 @@ Detail: `docs/TESTING.md`
 
 ## 📄 Lizenz
 
-MIT © GianLuetti
+MIT © AimceptionGian

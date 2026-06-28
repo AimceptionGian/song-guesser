@@ -1,29 +1,63 @@
-import type { GuessSubmission, ScoreResult, ScoreBreakdown } from '../types';
+import type { GuessSubmission, ScoreResult } from '../types';
 
-const POINTS_ARTIST = 150;
-const POINTS_TITLE = 150;
-const POINTS_YEAR_MAX = 200;
-const YEAR_PENALTY_PER_YEAR = 5;
+/**
+ * Calculate which "bucket" a year falls into relative to sorted existing years.
+ * Returns 0 if before the first, 1 if between first and second, etc.
+ * Returns the index of the bucket.
+ */
+function getTimelineBucket(year: number, sortedYears: number[]): number {
+  for (let i = 0; i < sortedYears.length; i++) {
+    if (year < sortedYears[i]) return i;
+  }
+  return sortedYears.length;
+}
 
+/**
+ * New 4×1 scoring system:
+ * - 1 point: Artist correct
+ * - 1 point: Title correct
+ * - 1 point: Exact year correct
+ * - 1 point: Correct timeline placement relative to player's existing cards
+ *
+ * existingCorrectYears: the correct years of cards the player already placed.
+ *   Used to determine if the guessed year is in the correct bucket.
+ * Total: 0–4 points per guess.
+ */
 export function calculateFullScore(
   submission: GuessSubmission,
   correctArtist: string,
   correctTitle: string,
-  correctYear: number
+  correctYear: number,
+  existingCorrectYears: number[] = []
 ): ScoreResult {
   const artistCorrect = submission.guessedArtist.trim().toLowerCase() === correctArtist.trim().toLowerCase();
   const titleCorrect = submission.guessedTitle.trim().toLowerCase() === correctTitle.trim().toLowerCase();
+  const yearExact = submission.guessedYear === correctYear;
 
-  const yearDiff = Math.abs(submission.guessedYear - correctYear);
-  const artistPoints = artistCorrect ? POINTS_ARTIST : 0;
-  const titlePoints = titleCorrect ? POINTS_TITLE : 0;
-  const yearPoints = Math.max(0, POINTS_YEAR_MAX - yearDiff * YEAR_PENALTY_PER_YEAR);
+  // Timeline placement: is guessedYear in the correct bucket?
+  let timelineCorrect = false;
+  if (existingCorrectYears.length > 0) {
+    const sortedExisting = [...existingCorrectYears].sort((a, b) => a - b);
+    const correctBucket = getTimelineBucket(correctYear, sortedExisting);
+    const guessedBucket = getTimelineBucket(submission.guessedYear, sortedExisting);
+    timelineCorrect = correctBucket === guessedBucket;
+  } else {
+    // First card: always get the timeline point if years match
+    timelineCorrect = submission.guessedYear === correctYear;
+  }
+
+  const artistPoints = artistCorrect ? 1 : 0;
+  const titlePoints = titleCorrect ? 1 : 0;
+  const yearPoints = yearExact ? 1 : 0;
+  const timelinePoints = timelineCorrect ? 1 : 0;
 
   return {
-    points: artistPoints + titlePoints + yearPoints,
+    points: artistPoints + titlePoints + yearPoints + timelinePoints,
     artistCorrect,
     titleCorrect,
-    yearDiff,
-    breakdown: { artistPoints, titlePoints, yearPoints },
+    yearDiff: Math.abs(submission.guessedYear - correctYear),
+    yearExact,
+    timelineCorrect,
+    breakdown: { artistPoints, titlePoints, yearPoints, timelinePoints },
   };
 }

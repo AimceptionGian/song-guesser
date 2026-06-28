@@ -9,6 +9,8 @@ interface ResultState {
   guessedYear: number;
   artistCorrect: boolean;
   titleCorrect: boolean;
+  yearExact: boolean;
+  timelineCorrect: boolean;
   yearDiff: number;
   points: number;
   players: Player[];
@@ -35,6 +37,8 @@ export default function ResultScreen() {
     guessedYear,
     artistCorrect,
     titleCorrect,
+    yearExact,
+    timelineCorrect,
     yearDiff,
     points,
     players,
@@ -144,23 +148,25 @@ export default function ResultScreen() {
             <div style={{ color: '#8b7fb8', fontSize: '0.82rem', marginTop: 4 }}>Punkte</div>
           </div>
 
-          {/* Artist */}
-          <ResultRow
-            label="🎤 Interpret"
-            guess={guessedArtist}
-            correct={song.artist}
-            isCorrect={artistCorrect}
-          />
+          {/* Points breakdown: 4×1 */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: 8,
+              padding: 12,
+              borderRadius: 12,
+              background: 'rgba(168,85,247,0.06)',
+              border: '1px solid rgba(168,85,247,0.12)',
+            }}
+          >
+            <BreakdownItem label="🎤 Interpret" ok={artistCorrect} />
+            <BreakdownItem label="🎶 Songtitel" ok={titleCorrect} />
+            <BreakdownItem label="📅 Exaktes Jahr" ok={yearExact} />
+            <BreakdownItem label="📊 Timeline" ok={timelineCorrect} />
+          </div>
 
-          {/* Title */}
-          <ResultRow
-            label="🎶 Songtitel"
-            guess={guessedTitle}
-            correct={song.title}
-            isCorrect={titleCorrect}
-          />
-
-          {/* Year */}
+          {/* Year Diff Detail */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
             <span style={{ color: '#8b7fb8', fontSize: '0.82rem', width: 90 }}>📅 Jahr</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
@@ -258,7 +264,34 @@ export default function ResultScreen() {
   );
 }
 
-function ResultRow({
+function BreakdownItem({ label, ok }: { label: string; ok: boolean }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 6,
+        padding: '6px 10px',
+        borderRadius: 8,
+        background: ok ? 'rgba(6,214,160,0.08)' : 'rgba(255,77,109,0.06)',
+      }}
+    >
+      <span style={{ color: '#8b7fb8', fontSize: '0.78rem' }}>{label}</span>
+      <span style={{ fontSize: '1rem' }}>{ok ? '✅' : '❌'}</span>
+      <span
+        style={{
+          fontFamily: "'JetBrains Mono', monospace",
+          fontSize: '0.78rem',
+          fontWeight: 700,
+          color: ok ? '#06d6a0' : '#ff4d6d',
+        }}
+      >
+        +{ok ? '1' : '0'}
+      </span>
+    </div>
+  );
+}
   label,
   guess,
   correct,
