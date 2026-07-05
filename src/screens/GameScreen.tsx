@@ -329,29 +329,6 @@ export default function GameScreen() {
 
         {/* Inputs + Audio */}
         <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gap: 10 }}>
-          <div
-            className="grid-2"
-          >
-            <InputGroup label="🎤 Interpret / Band">
-              <input
-                className="text-input"
-                type="text"
-                placeholder="z.B. Queen, Beyoncé…"
-                value={artistInput}
-                onChange={(e) => setArtistInput(e.target.value)}
-              />
-            </InputGroup>
-            <InputGroup label="🎶 Songtitel">
-              <input
-                className="text-input"
-                type="text"
-                placeholder="z.B. Bohemian Rhapsody…"
-                value={titleInput}
-                onChange={(e) => setTitleInput(e.target.value)}
-              />
-            </InputGroup>
-          </div>
-
           {currentCard && (
           <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gap: 10 }}>
             <div
