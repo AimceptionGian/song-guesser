@@ -11,9 +11,10 @@ describe('CatalogService', () => {
 
   it('should return list of available providers', () => {
     const providers = service.getAvailableProviders();
+    expect(providers).toContain('itunes');
     expect(providers).toContain('deezer');
     expect(providers).toContain('mock-catalog');
-    expect(providers).toHaveLength(2);
+    expect(providers).toHaveLength(3);
   });
 
   it('should return mock provider directly', () => {
@@ -23,7 +24,7 @@ describe('CatalogService', () => {
 
   it('should return primary provider by default', () => {
     const primary = service.getPrimaryProvider();
-    expect(primary.name).toBe('deezer');
+    expect(primary.name).toBe('itunes');
   });
 
   it('should get named provider', () => {
@@ -31,8 +32,8 @@ describe('CatalogService', () => {
     expect(mock.name).toBe('mock-catalog');
   });
 
-  it('should fall back to mock when Deezer search returns empty', async () => {
-    // Make Deezer return empty
+  it('should fall back to mock when iTunes search returns empty', async () => {
+    // Make iTunes return empty
     vi.spyOn(service.getPrimaryProvider(), 'searchTracks').mockResolvedValueOnce([]);
     // Mock should have data
     const mockSpy = vi.spyOn(service.getMockProvider(), 'searchTracks').mockResolvedValueOnce([
@@ -45,7 +46,7 @@ describe('CatalogService', () => {
     expect(mockSpy).toHaveBeenCalledOnce();
   });
 
-  it('should fall back to mock when Deezer throws', async () => {
+  it('should fall back to mock when iTunes throws', async () => {
     vi.spyOn(service.getPrimaryProvider(), 'searchTracks').mockRejectedValueOnce(new Error('API down'));
     const mockSpy = vi.spyOn(service.getMockProvider(), 'searchTracks').mockResolvedValueOnce([
       { id: 'm1', title: 'Mock Song', artist: 'Mock Artist', album: 'Mock Album', year: 2000, genre: 'Pop', previewUrl: null, coverUrl: null },

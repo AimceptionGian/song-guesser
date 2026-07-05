@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useEffect } from 'react';
+import { useRef, useCallback, useState, useMemo } from 'react';
 
 export interface TimelineHandle {
   year: number;
@@ -21,6 +21,23 @@ export interface PlacedCardInfo {
   title?: string;
 }
 
+// Collision resolution: assign each card to a row so cards don't overlap
+function assignRows(cards: PlacedCardInfo[]): PlacedCardInfo[] {
+  const sorted = [...cards].sort((a, b) => a.year - b.year);
+  const rows: number[] = []; // midpoints of each occupied row (in year-space)
+  const assigned = sorted.map((card) => {
+    // Find first row that doesn't overlap (±6 years from any card in that row)
+    let rowIdx = 0;
+    for (; rowIdx < rows.length; rowIdx++) {
+      if (Math.abs(card.year - rows[rowIdx]) > 7) break;
+    }
+    if (rowIdx >= rows.length) rows.push(card.year);
+    else rows[rowIdx] = card.year;
+    return { ...card, _row: rowIdx };
+  });
+  return assigned as any;
+}
+
 export default function Timeline({
   minYear,
   maxYear,
@@ -31,6 +48,7 @@ export default function Timeline({
 }: TimelineProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
+
   const decadeMarks = [];
   for (let d = Math.ceil(minYear / 10) * 10; d <= maxYear; d += 10) {
     decadeMarks.push(d);
@@ -76,6 +94,11 @@ export default function Timeline({
     setDragging(false);
   }, []);
 
+  // Assign cards to rows to prevent visual overlap
+  const rowCards = useMemo(() => assignRows(placedCards), [placedCards]);
+  const rowCount = rowCards.length > 0 ? Math.max(...rowCards.map((c: any) => c._row)) + 1 : 0;
+  const cardsHeight = rowCount * 72 + 16;
+
   return (
     <div
       className="timeline-zone"
@@ -111,16 +134,19 @@ export default function Timeline({
         </span>
       </div>
 
-      {/* Placed cards above the track — V7 wireframe style */}
+      {/* Placed cards — grid layout with stem lines to exact year */}
       <div
         style={{
           position: 'relative',
-          height: placedCards.length > 0 ? 90 : 10,
+          height: cardsHeight,
           marginBottom: 0,
         }}
       >
-        {placedCards.map((card, i) => {
+        {(rowCards as any[]).map((card: any, i: number) => {
           const left = yearToPercent(card.year);
+          // Each row is ~66px tall, cards sit at their row
+          const cardTop = rowCount > 1 ? (card._row / (rowCount - 1)) * 50 : 0;
+          const stemHeight = Math.max(8, 56 - cardTop);
           return (
             <div
               key={i}
@@ -128,27 +154,26 @@ export default function Timeline({
                 position: 'absolute',
                 left: `${left}%`,
                 transform: 'translateX(-50%)',
-                bottom: 0,
+                top: cardTop,
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
                 zIndex: 2,
               }}
             >
-              {/* Mini card */}
+              {/* Mini card with year */}
               <div
                 style={{
-                  width: 52,
+                  width: 62,
                   borderRadius: 8,
-                  border: `1px solid ${card.isCorrect ? 'rgba(6,214,160,0.4)' : 'rgba(168,85,247,0.3)'}`,
+                  border: `1px solid ${card.isCorrect ? 'rgba(6,214,160,0.5)' : 'rgba(168,85,247,0.35)'}`,
                   background: '#13121f',
                   overflow: 'hidden',
-                  marginBottom: 2,
                 }}
               >
                 <div
                   style={{
-                    height: 28,
+                    height: 26,
                     display: 'grid',
                     placeItems: 'center',
                     background: card.isCorrect
@@ -156,45 +181,49 @@ export default function Timeline({
                       : 'rgba(168,85,247,0.08)',
                   }}
                 >
-                  <span style={{ fontSize: 14 }}>{card.emoji || '🎵'}</span>
+                  <span style={{ fontSize: 13 }}>{card.emoji || '🎵'}</span>
                 </div>
-                {(card.title) && (
+                <div style={{ padding: '2px 4px', textAlign: 'center' }}>
                   <div style={{
-                    padding: '2px 4px',
-                    textAlign: 'center',
+                    fontFamily: "'JetBrains Mono', monospace",
                     fontSize: '0.5rem',
-                    color: '#f0eeff',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    lineHeight: 1.2,
+                    color: '#8b7fb8',
                   }}>
-                    {card.title}
+                    {card.title ? card.title.substring(0, 10) : ''}
                   </div>
-                )}
+                  <div style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: '0.55rem',
+                    color: card.isCorrect ? '#06d6a0' : '#a855f7',
+                    fontWeight: 600,
+                  }}>
+                    {card.year}
+                  </div>
+                </div>
               </div>
-              {/* Stem line */}
-              <div
-                style={{
-                  width: 1,
-                  height: 8,
-                  background: card.isCorrect
-                    ? 'rgba(6,214,160,0.35)'
-                    : 'rgba(168,85,247,0.3)',
-                }}
-              />
-              {/* Dot on track */}
-              <div
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  background: card.isCorrect ? '#06d6a0' : '#a855f7',
-                  boxShadow: card.isCorrect
-                    ? '0 0 6px rgba(6,214,160,0.5)'
-                    : '0 0 6px rgba(168,85,247,0.5)',
-                }}
-              />
+              {/* Stem line + dot */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                <div
+                  style={{
+                    width: 1,
+                    height: stemHeight,
+                    background: card.isCorrect
+                      ? 'rgba(6,214,160,0.35)'
+                      : 'rgba(168,85,247,0.3)',
+                  }}
+                />
+                <div
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: card.isCorrect ? '#06d6a0' : '#a855f7',
+                    boxShadow: card.isCorrect
+                      ? '0 0 6px rgba(6,214,160,0.5)'
+                      : '0 0 6px rgba(168,85,247,0.5)',
+                  }}
+                />
+              </div>
             </div>
           );
         })}

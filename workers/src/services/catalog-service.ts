@@ -1,6 +1,7 @@
 import type { CatalogProvider, CatalogTrack } from '../adapters/catalog-provider';
 import { MockCatalogProvider } from '../adapters/mock-catalog-provider';
 import { DeezerCatalogProvider } from '../adapters/deezer-catalog-provider';
+import { ITunesCatalogProvider } from '../adapters/itunes-catalog-provider';
 import { JamendoCatalogProvider } from '../adapters/jamendo-catalog-provider';
 import type { Env } from '../env';
 
@@ -16,9 +17,11 @@ export class CatalogService {
     // Register providers
     const mock = new MockCatalogProvider();
     const deezer = new DeezerCatalogProvider();
+    const itunes = new ITunesCatalogProvider();
 
     this.providers.set(mock.name, mock);
     this.providers.set(deezer.name, deezer);
+    this.providers.set(itunes.name, itunes);
 
     // Register Jamendo if client ID is configured
     if (env?.JAMENDO_CLIENT_ID) {
@@ -27,8 +30,9 @@ export class CatalogService {
       console.log(`[CatalogService] Jamendo provider registered`);
     }
 
-    // Deezer is primary when available; Mock serves as fallback
-    this.primaryProviderName = 'deezer';
+    // iTunes is primary (correct original years + preview URLs);
+    // Deezer and Mock serve as fallbacks
+    this.primaryProviderName = 'itunes';
   }
 
   getProvider(name?: string): CatalogProvider {
@@ -91,6 +95,20 @@ export class CatalogService {
    */
   async getPreviewUrl(trackId: string): Promise<string | null> {
     return this.getPrimaryProvider().getPreviewUrl(trackId);
+  }
+
+  /**
+   * Get chart/top tracks from the primary provider.
+   */
+  async getChartTracks(limit = 25): Promise<CatalogTrack[]> {
+    try {
+      const primary = this.getPrimaryProvider();
+      const results = await primary.getChartTracks(limit);
+      if (results.length > 0) return results;
+    } catch (err) {
+      console.warn('[CatalogService] Chart fetch failed:', err);
+    }
+    return this.getMockProvider().getChartTracks(limit);
   }
 }
 

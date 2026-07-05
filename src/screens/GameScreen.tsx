@@ -36,18 +36,19 @@ export default function GameScreen() {
 
     // If we're coming back from ResultScreen, restore the state
     if (incoming?.players) {
-      setPlayers(incoming.players as Player[]);
+      const restoredPlayers = incoming.players as Player[];
+      setPlayers(restoredPlayers);
       if (typeof incoming.currentPlayerIndex === 'number') setCurrentPlayerIndex(incoming.currentPlayerIndex);
       if (typeof incoming.round === 'number') setRound(incoming.round as number);
       setGameStarted(true);
-      // Restore placed cards from player state
-      const p = (incoming.players as Player[])[incoming.currentPlayerIndex as number || 0];
-      if (p?.placedCards) {
+      // Restore placed cards from current player's state (handle both frontend {song} and backend {card} format)
+      const p = restoredPlayers[incoming.currentPlayerIndex as number] || restoredPlayers[0];
+      if (p?.placedCards?.length) {
         setPlacedYears(p.placedCards.map((pc) => ({
           year: pc.placedYear,
           isCorrect: pc.isCorrect,
-          emoji: pc.song.emoji,
-          title: pc.song.title,
+          emoji: (pc as any).song?.emoji ?? (pc as any).card?.emoji ?? '🎵',
+          title: (pc as any).song?.title ?? (pc as any).card?.title ?? '',
         })));
       }
       return;
@@ -79,7 +80,18 @@ export default function GameScreen() {
   // ─── Sync state from backend after each command ───
   const syncState = useCallback((state: any | null | undefined) => {
     if (!state) return;
-    if (state.players) setPlayers(state.players as Player[]);
+    if (state.players) {
+      // Convert backend format (placedCards has {card}) to frontend format (placedCards has {song})
+      const converted = (state.players as any[]).map((p: any) => ({
+        ...p,
+        placedCards: (p.placedCards || []).map((pc: any) => ({
+          placedYear: pc.placedYear,
+          isCorrect: pc.isCorrect,
+          song: pc.song || pc.card || null,
+        })),
+      }));
+      setPlayers(converted as Player[]);
+    }
     if (typeof state.currentPlayerIndex === 'number') setCurrentPlayerIndex(state.currentPlayerIndex);
     if (typeof state.currentRound === 'number') setRound(state.currentRound);
     if (typeof state.totalRounds === 'number') setTotalRounds(state.totalRounds);
@@ -175,8 +187,6 @@ export default function GameScreen() {
       emoji: currentCard.emoji,
       title: currentCard.title,
     }]);
-    setPlacedYears((prev) => [...prev, { year: timelineYear, isCorrect: yearDiff <= 5 }]);
-
     try {
       await api.submitGuess(gameCode, {
         playerId: currentPlayer?.id || 'local-player',
@@ -342,14 +352,85 @@ export default function GameScreen() {
             </InputGroup>
           </div>
 
-          <AudioPlayer
-            previewUrl={currentCard?.previewUrl}
-            songTitle={undefined}
-            artistName={undefined}
-          />
+          {currentCard && (
+          <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gap: 10 }}>
+            <div
+              className="grid-2"
+            >
+              <InputGroup label="🎤 Interpret / Band">
+                <input
+                  className="text-input"
+                  type="text"
+                  placeholder="z.B. Queen, Beyoncé…"
+                  value={artistInput}
+                  onChange={(e) => setArtistInput(e.target.value)}
+                />
+              </InputGroup>
+              <InputGroup label="🎶 Songtitel">
+                <input
+                  className="text-input"
+                  type="text"
+                  placeholder="z.B. Bohemian Rhapsody…"
+                  value={titleInput}
+                  onChange={(e) => setTitleInput(e.target.value)}
+                />
+              </InputGroup>
+            </div>
 
+            <AudioPlayer
+              previewUrl={currentCard.previewUrl}
+              songTitle={undefined}
+              artistName={undefined}
+            />
+
+            <button
+              onClick={handleSubmit}
+              disabled={isLoading}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 10,
+                width: '100%',
+                padding: '18px 24px',
+                borderRadius: 16,
+                border: 'none',
+                cursor: isLoading ? 'default' : 'pointer',
+                background: 'linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #f72585 100%)',
+                color: 'white',
+                fontWeight: 700,
+                fontSize: '1.05rem',
+                letterSpacing: '0.02em',
+                boxShadow: isLoading ? 'none' : '0 0 40px rgba(168,85,247,0.4)',
+                opacity: isLoading ? 0.6 : 1,
+                transition: 'transform 0.15s, box-shadow 0.15s, opacity 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                if (isLoading) return;
+                e.currentTarget.style.transform = 'scale(1.03)';
+                e.currentTarget.style.boxShadow = '0 0 55px rgba(168,85,247,0.55)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'scale(1)';
+                e.currentTarget.style.boxShadow = '0 0 40px rgba(168,85,247,0.4)';
+              }}
+            >
+              {isLoading ? (
+                <>
+                  <span className="spinner" />
+                  Wird geladen…
+                </>
+              ) : (
+                'Antwort bestätigen ✓'
+              )}
+            </button>
+          </div>
+        )}
+
+        {/* Draw card button (only when no card is active) */}
+        {!currentCard && (
           <button
-            onClick={currentCard ? handleSubmit : handleDrawCard}
+            onClick={handleDrawCard}
             disabled={isLoading}
             style={{
               display: 'flex',
@@ -361,16 +442,12 @@ export default function GameScreen() {
               borderRadius: 16,
               border: 'none',
               cursor: isLoading ? 'default' : 'pointer',
-              background: currentCard
-                ? 'linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #f72585 100%)'
-                : 'linear-gradient(135deg, #7c3aed, #a855f7)',
+              background: 'linear-gradient(135deg, #7c3aed, #a855f7)',
               color: 'white',
               fontWeight: 700,
               fontSize: '1.05rem',
               letterSpacing: '0.02em',
-              boxShadow: currentCard
-                ? '0 0 40px rgba(168,85,247,0.4)'
-                : '0 0 30px rgba(168,85,247,0.3)',
+              boxShadow: isLoading ? 'none' : '0 0 30px rgba(168,85,247,0.3)',
               opacity: isLoading ? 0.6 : 1,
               transition: 'transform 0.15s, box-shadow 0.15s, opacity 0.2s',
             }}
@@ -381,9 +458,7 @@ export default function GameScreen() {
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.transform = 'scale(1)';
-              e.currentTarget.style.boxShadow = currentCard
-                ? '0 0 40px rgba(168,85,247,0.4)'
-                : '0 0 30px rgba(168,85,247,0.3)';
+              e.currentTarget.style.boxShadow = '0 0 30px rgba(168,85,247,0.3)';
             }}
           >
             {isLoading ? (
@@ -391,12 +466,11 @@ export default function GameScreen() {
                 <span className="spinner" />
                 Wird geladen…
               </>
-            ) : currentCard ? (
-              'Antwort bestätigen ✓'
             ) : (
               'Karte ziehen 🃏'
             )}
           </button>
+        )}
         </div>
 
         {/* Error banner */}

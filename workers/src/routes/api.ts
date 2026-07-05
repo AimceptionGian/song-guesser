@@ -88,7 +88,12 @@ api.post('/lobbies/:code/start', async (c) => {
   await setLobbyState(lobby.id, 'starting');
 
   // Fetch real tracks from Deezer for the match deck
-  const tracks = await catalogService.searchTracks('', 50);
+  let tracks;
+  try {
+    tracks = await catalogService.getChartTracks(50);
+  } catch {
+    tracks = [];
+  }
   const deck = tracks.length > 0
     ? tracks.map((t) => ({
         id: t.id,
@@ -179,8 +184,13 @@ api.post('/games/:code/start', async (c) => {
   const lobby = await getLobbyByCode(code);
   if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
 
-  // Pre-seed the deck with Deezer tracks
-  const tracks = await catalogService.searchTracks('', 50);
+  // Pre-seed the deck with Deezer chart tracks (have preview URLs)
+  let tracks;
+  try {
+    tracks = await catalogService.getChartTracks(50);
+  } catch {
+    tracks = [];
+  }
   const deck = tracks.length > 0
     ? tracks.map((t) => ({
         id: t.id, title: t.title, artist: t.artist, year: t.year,

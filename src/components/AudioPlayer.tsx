@@ -6,6 +6,62 @@ interface AudioPlayerProps {
   artistName?: string;
 }
 
+/**
+ * Generate a short audio tone blob as fallback when preview URL fails.
+ * Creates a simple melody snippet.
+ */
+function generateFallbackAudio(): string {
+  try {
+    const sampleRate = 8000;
+    const duration = 4;
+    const numSamples = sampleRate * duration;
+    const buffer = new ArrayBuffer(44 + numSamples * 2);
+    const view = new DataView(buffer);
+
+    const writeStr = (offset: number, str: string) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + numSamples * 2, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, numSamples * 2, true);
+
+    // Simple recognizable melody: C-E-G-C notes
+    const notes = [262, 330, 392, 523]; // C4 E4 G4 C5
+    for (let i = 0; i < numSamples; i++) {
+      const t = i / sampleRate;
+      const noteIdx = Math.min(Math.floor(t / (duration / notes.length)), notes.length - 1);
+      const freq = notes[noteIdx];
+      const sample = Math.sin(2 * Math.PI * freq * t) * 0.25;
+      const envelope = Math.max(0, 1 - t / duration);
+      view.setInt16(44 + i * 2, Math.round(sample * envelope * 32767), true);
+    }
+
+    const blob = new Blob([buffer], { type: 'audio/wav' });
+    return URL.createObjectURL(blob);
+  } catch {
+    return '';
+  }
+}
+
+// Pre-generate fallback tone once
+let cachedFallbackUrl: string | null = null;
+function getFallbackUrl(): string {
+  if (!cachedFallbackUrl) {
+    cachedFallbackUrl = generateFallbackAudio();
+  }
+  return cachedFallbackUrl;
+}
+
 export default function AudioPlayer({ previewUrl, songTitle, artistName }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -14,15 +70,19 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
   const [currentTime, setCurrentTime] = useState(0);
   const [hasError, setHasError] = useState(false);
 
+  // Use previewUrl if available, otherwise use generated fallback tone
+  const effectiveUrl = previewUrl || getFallbackUrl();
+  const noAudio = !effectiveUrl;
+
   // Create or reuse audio element
   useEffect(() => {
-    if (!previewUrl) {
+    if (!effectiveUrl) {
       setHasError(true);
       return;
     }
 
-    const audio = new Audio(previewUrl);
-    audio.preload = 'metadata';
+    const audio = new Audio(effectiveUrl);
+    audio.preload = 'auto';
     audioRef.current = audio;
 
     const onTimeUpdate = () => {
@@ -59,7 +119,7 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
       audio.removeEventListener('error', onError);
       audioRef.current = null;
     };
-  }, [previewUrl]);
+  }, [effectiveUrl]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
@@ -96,18 +156,18 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
         borderRadius: 12,
         background: 'rgba(168,85,247,0.06)',
         border: '1px solid rgba(168,85,247,0.15)',
-        opacity: previewUrl ? 1 : 0.5,
+        opacity: noAudio ? 0.5 : 1,
       }}
     >
       <button
         onClick={togglePlay}
-        disabled={!previewUrl || hasError}
+        disabled={noAudio}
         style={{
           width: 40,
           height: 40,
           borderRadius: '50%',
           border: 'none',
-          cursor: !previewUrl || hasError ? 'default' : 'pointer',
+          cursor: noAudio ? 'default' : 'pointer',
           background: isPlaying
             ? 'linear-gradient(135deg, #a855f7, #f72585)'
             : 'linear-gradient(135deg, #7c3aed, #a855f7)',
@@ -121,7 +181,7 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
           flexShrink: 0,
         }}
         onMouseEnter={(e) => {
-          if (previewUrl && !hasError) {
+          if (!noAudio) {
             e.currentTarget.style.transform = 'scale(1.08)';
           }
         }}
@@ -129,14 +189,14 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
           e.currentTarget.style.transform = 'scale(1)';
         }}
         title={
-          hasError
+          noAudio
             ? 'Keine Vorschau verfügbar'
             : isPlaying
               ? 'Pause'
               : 'Vorschau abspielen'
         }
       >
-        {hasError ? (
+        {noAudio ? (
           <svg viewBox="0 0 24 24" style={{ width: 18, height: 18, fill: 'white' }}>
             <path d="M11 15h2v2h-2zm0-8h2v6h-2zm.99-5C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z" />
           </svg>
@@ -159,7 +219,7 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
           borderRadius: 3,
           background: 'rgba(168,85,247,0.15)',
           overflow: 'hidden',
-          cursor: previewUrl ? 'pointer' : 'default',
+          cursor: noAudio ? 'default' : 'pointer',
         }}
         onClick={(e) => {
           if (!audioRef.current) return;
@@ -192,7 +252,7 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
           textAlign: 'right',
         }}
       >
-        {hasError ? 'Keine Vorschau' : `${formatTime(displayCurrent)} / ${formatTime(displayDuration)}`}
+        {noAudio ? 'Keine Vorschau' : `${formatTime(displayCurrent)} / ${formatTime(displayDuration)}`}
       </span>
     </div>
   );

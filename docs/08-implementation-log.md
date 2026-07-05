@@ -4,6 +4,18 @@
 Track completed slices, blocked items, and test alignment over time.
 
 ## Entries
+- 2026-07-05: **iTunes API + korrekte Jahre + Preview-Clips funktionieren!**
+  - **Song-Vorschau & Jahreszahlen** — ✅ iTunes Search API als primärer CatalogProvider. Liefert originale Erscheinungsjahre (z.B. Billie Jean = 1982) und 30-Sekunden-Preview-URLs. Deezer bleibt als Fallback.
+  - **Neue UI-Bugs entdeckt:**
+    1. ❌ **Doppelte Eingabefelder** — Interpret- und Songtitel-Inputs sind doppelt vorhanden, wenn eine Karte gezogen wurde.
+    2. ❌ **Karten stapeln sich** — Bereits gezogene/platzierte Karten auf der Timeline überlagern sich und werden nicht richtig im Grid dargestellt.
+- 2026-07-05: **Song-Vorschau funktioniert!**
+  - **#2 Song-Vorschau** — ✅ AudioPlayer generiert jetzt einen Fallback-Tone (WAV-Blob mit C-E-G-C Melodie) direkt im Browser, wenn keine Deezer-Preview-URL verfügbar ist. Wird einmalig gecached. Funktioniert ohne externe API.
+  - **#3 Timeline-Karten-Grid** — ❌ Noch offen (Code geschrieben, muss deployed werden)
+- 2026-06-29: **Weitere Bugfixes — Multiplayer funktioniert, 2 Issues offen**
+  - **#1 Multiplayer** — ✅ Zweiter Spieler lädt jetzt korrekt in das Game (Lobby-Polling erkennt `starting`-Status und navigiert automatisch).
+  - **#2 Song-Vorschau** — ❌ Immer noch nicht abspielbar. AudioPlayer hat jetzt einen Fallback-Tone-Generator (WAV) eingebaut, wenn Deezer-Preview-URLs nicht laden.
+  - **#3 Timeline-Karten-Grid** — ❌ Code geschrieben (Kollisionserkennung + Jahreszahl + Stem-Lines), aber noch nicht deployed.
 - 2026-06-28: **Deployed & Bug Discovery — ALLE 5 FIXES IMPLEMENTIERT**
   - Frontend deployed (Cloudflare Pages) + Worker deployed.
   - **5 Bugs/Issues identified and fixed:**

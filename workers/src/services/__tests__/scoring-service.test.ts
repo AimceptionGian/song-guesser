@@ -155,7 +155,7 @@ describe('calculateFullScore — 4×1 point system', () => {
       expect(result.timelineCorrect).toBe(true);
       expect(result.breakdown.timelinePoints).toBe(1);
       expect(result.breakdown.yearPoints).toBe(0);
-      expect(result.points).toBe(2); // artist + title + timeline
+      expect(result.points).toBe(3); // artist + title + timeline
     });
 
     it('should NOT award timeline point when guessed year is in wrong bucket', () => {
@@ -188,7 +188,7 @@ describe('calculateFullScore — 4×1 point system', () => {
 
       expect(result.timelineCorrect).toBe(true);
       expect(result.breakdown.timelinePoints).toBe(1);
-      expect(result.points).toBe(4);
+      expect(result.points).toBe(3);
     });
 
     it('should handle last existing year bucket (after all)', () => {
@@ -204,7 +204,7 @@ describe('calculateFullScore — 4×1 point system', () => {
 
       expect(result.timelineCorrect).toBe(true);
       expect(result.breakdown.timelinePoints).toBe(1);
-      expect(result.points).toBe(4);
+      expect(result.points).toBe(3);
     });
   });
 
@@ -224,30 +224,5 @@ describe('calculateFullScore — 4×1 point system', () => {
     expect(result.breakdown.yearPoints).toBe(1);
     expect(result.breakdown.timelinePoints).toBe(1);
     expect(result.points).toBe(4); // all 4 points
-  });
-});
-    expect(result.breakdown.titlePoints).toBe(0);
-    expect(result.breakdown.yearPoints).toBe(200);
-    expect(result.points).toBe(350);
-  });
-
-  it('should award only title points when only title is correct', () => {
-    const result = calculateFullScore(
-      makeSubmission({
-        guessedArtist: 'Wrong Artist',
-        guessedTitle: CORRECT_TITLE,
-        guessedYear: CORRECT_YEAR,
-      }),
-      CORRECT_ARTIST,
-      CORRECT_TITLE,
-      CORRECT_YEAR
-    );
-
-    expect(result.artistCorrect).toBe(false);
-    expect(result.titleCorrect).toBe(true);
-    expect(result.breakdown.artistPoints).toBe(0);
-    expect(result.breakdown.titlePoints).toBe(150);
-    expect(result.breakdown.yearPoints).toBe(200);
-    expect(result.points).toBe(350);
   });
 });

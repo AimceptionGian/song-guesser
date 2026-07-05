@@ -39,4 +39,8 @@ export class MockCatalogProvider implements CatalogProvider {
   async getPreviewUrl(_trackId: string): Promise<string | null> {
     return null; // mock has no previews
   }
+
+  async getChartTracks(limit = 10): Promise<CatalogTrack[]> {
+    return this.tracks.slice(0, limit);
+  }
 }

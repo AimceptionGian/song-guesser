@@ -35,20 +35,10 @@ Plan and track implementation slices aligned with approved test packages.
 
 ## Remaining work
 
-### 🐛 Bugfixes (nach Deployment entdeckt) ✅ ALLE BEHOBEN (2026-06-28)
-- [x] Fix `calculateScore()` — removed dead code (was comparing against empty strings)
-- [x] **#1 Lobby-Flow korrigieren** — `handleCreateGame()` navigiert nicht mehr direkt zu `/game/:code`. LobbyScreen zeigt nach Erstellen den Code + wartende Spieler (Polling alle 2s). Host kann Spiel starten.
-- [x] **#2 Punkte-System umbauen** — Neues 4×1-System implementiert:
-  - 1 Punkt: Karte RICHTIG in Timeline eingeordnet (vor/nach bestehenden Karten aus früheren Runden)
-  - 1 Punkt: Exaktes Jahr getroffen
-  - 1 Punkt: Interpret richtig
-  - 1 Punkt: Titel richtig
-  - Altes `calculateFullScore()` mit 150/150/200 + Jahr-Abzug wurde durch neues System ersetzt
-  - Backend `calculateFullScore()` + Frontend `handleSubmit()` umgestellt
-  - Tests komplett neu geschrieben (12 Tests für das 4×1-System)
-- [x] **#3 Song-Snippets abspielbar machen** — `previewUrl` in alle 15 Mock-Tracks eingefügt (echte Deezer-Preview-URLs)
-- [x] **#4 Platzierte Karten auf Timeline anzeigen** — Timeline rendert Mini-Karten mit Emoji, Titel, Stem-Line und Dot (V7-Wireframe-Design). `placedCards` werden nach Navigation via Player-State korrekt wiederhergestellt.
-- [x] **#5 Lobby-Einstellungen UI** — Lobby-Warteraum mit Spielerliste; Host kann Spiel starten. Lobby-Settings werden im Wartezimmer angezeigt.
+### 🐛 Noch offen / in Arbeit (Stand 2026-07-05)
+- [ ] **Doppelte Eingabefelder (#6)** — Interpret- und Songtitel-Inputs sind doppelt vorhanden, wenn eine Karte gezogen wurde. Vermutlich wurde der alte `<div className="grid-2">`-Block nicht vollständig durch den neuen `{currentCard && (...)}`-Block ersetzt.
+- [ ] **Karten stapeln sich auf Timeline (#7)** — Bereits gezogene/platzierte Karten überlagern sich. Die Kollisionserkennung (`assignRows`) ist im Code, aber die Timeline-Komponente rendert die Karten noch nicht korrekt im Grid. Muss überarbeitet werden.
+- [ ] **Timeline-Karten-Grid (#3)** — Timeline hat neuen Code mit Kollisionserkennung (`assignRows`), Jahreszahl auf Karte, Stem-Lines. Muss deployed und getestet werden.
 
 ### 🔧 Infrastructure
 - [x] Install Vitest and set up test infrastructure (frontend + backend)

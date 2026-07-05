@@ -9,6 +9,7 @@ export interface CatalogProvider {
   searchTracks(query: string, limit?: number): Promise<CatalogTrack[]>;
   getTrack(id: string): Promise<CatalogTrack | null>;
   getPreviewUrl(trackId: string): Promise<string | null>;
+  getChartTracks(limit?: number): Promise<CatalogTrack[]>;
 }
 
 export interface CatalogTrack {

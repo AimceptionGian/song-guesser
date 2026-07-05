@@ -16,6 +16,7 @@ interface DeezerTrack {
   rank: number;
   explicit_lyrics: boolean;
   preview: string;
+  release_date?: string; // track-level release date (available on individual track endpoint)
   artist: {
     id: number;
     name: string;
@@ -26,7 +27,7 @@ interface DeezerTrack {
     title: string;
     cover_medium: string;
     cover_big: string;
-    release_date: string;
+    release_date?: string; // album-level release date
   };
 }
 
@@ -67,7 +68,15 @@ async function enrichTrackWithGenre(track: DeezerTrackWithGenres): Promise<strin
 }
 
 function deezerToCatalogTrack(track: DeezerTrack): CatalogTrack {
-  const year = extractYear(track.album.release_date);
+  // Try multiple sources for the year
+  let year = 2000;
+  const dateStr = track.release_date || track.album?.release_date;
+  if (dateStr) {
+    const parsed = parseInt(dateStr.slice(0, 4), 10);
+    if (!isNaN(parsed) && parsed >= 1950 && parsed <= 2030) {
+      year = parsed;
+    }
+  }
 
   return {
     id: `deezer-${track.id}`,
@@ -75,7 +84,7 @@ function deezerToCatalogTrack(track: DeezerTrack): CatalogTrack {
     artist: track.artist.name,
     album: track.album.title,
     year,
-    genre: 'Pop', // Deezer track search doesn't include genre; defaulted
+    genre: 'Pop',
     previewUrl: track.preview || null,
     coverUrl: track.album.cover_medium || track.album.cover_big || null,
   };
@@ -161,8 +170,8 @@ export class DeezerCatalogProvider implements CatalogProvider {
   }
 
   /**
-   * Fetch Deezer chart (global top tracks).
-   * Useful for seeding the "hits" category.
+   * Fetch Deezer chart (global top tracks) and enrich with release dates.
+   * Chart endpoint doesn't include release_date, so we fetch track details in parallel.
    */
   async getChartTracks(limit = 10): Promise<CatalogTrack[]> {
     const url = `${this.baseUrl}/chart/0/tracks?limit=${Math.min(limit, 50)}`;
@@ -175,9 +184,27 @@ export class DeezerCatalogProvider implements CatalogProvider {
       if (!res.ok) return [];
 
       const body = (await res.json()) as DeezerSearchResult;
-      if (!body.data) return [];
+      if (!body.data || body.data.length === 0) return [];
 
-      return body.data.map(deezerToCatalogTrack);
+      // Chart data has no release_date — fetch each track's detail in parallel
+      const enriched = await Promise.all(
+        body.data.map(async (track) => {
+          try {
+            const detailRes = await fetch(`${this.baseUrl}/track/${track.id}`, {
+              headers: { 'Accept': 'application/json' },
+            });
+            if (detailRes.ok) {
+              const detail = (await detailRes.json()) as DeezerTrack;
+              return deezerToCatalogTrack(detail);
+            }
+          } catch {
+            // fall through to chart data
+          }
+          return deezerToCatalogTrack(track);
+        })
+      );
+
+      return enriched;
     } catch (err) {
       console.warn(`[DeezerCatalogProvider] getChartTracks error:`, err);
       return [];
