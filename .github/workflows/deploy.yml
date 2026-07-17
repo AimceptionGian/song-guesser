@@ -15,6 +15,7 @@ jobs:
   test-and-deploy:
     name: Test & Deploy Worker
     runs-on: ubuntu-latest
+    environment: Cloudflare
     steps:
       - uses: actions/checkout@v4
 
