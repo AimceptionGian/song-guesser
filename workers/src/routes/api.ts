@@ -15,6 +15,7 @@ import { createSession, extractTokenFromRequest, validateSession } from '../serv
 import { historyService } from '../services/history-service';
 import type { HistoryTrack } from '../adapters/history-provider';
 import type { CatalogTrack } from '../adapters/catalog-provider';
+import { enrichTrackYears } from '../services/spotify-year-service';
 import type { CreateLobbyRequest, JoinLobbyRequest, Lobby } from '../types';
 import type { Env } from '../env';
 
@@ -80,6 +81,40 @@ api.post('/lobbies/:code/leave', async (c) => {
   return c.json({ success: true });
 });
 
+/**
+ * Build the match deck: chart tracks from the catalog chain (itunes→deezer→mock),
+ * with release years corrected via Spotify (the chart providers often report
+ * compilation/re-release dates). Returns undefined when no tracks are available,
+ * so the DO falls back to MOCK_TRACKS.
+ */
+async function buildChartDeck(env: Env) {
+  let tracks: CatalogTrack[];
+  try {
+    tracks = await catalogService.getChartTracks(50);
+  } catch {
+    tracks = [];
+  }
+  if (tracks.length === 0) return undefined;
+
+  try {
+    tracks = await enrichTrackYears(tracks, env);
+  } catch (err) {
+    console.warn('[buildChartDeck] year enrichment failed, keeping provider years:', err);
+  }
+
+  return tracks.map((t) => ({
+    id: t.id,
+    title: t.title,
+    artist: t.artist,
+    year: t.year,
+    genre: t.genre,
+    emoji: '🎵',
+    previewUrl: t.previewUrl ?? undefined,
+    coverUrl: t.coverUrl ?? undefined,
+    gradient: 'linear-gradient(135deg, #1e1c2e, #13121f)',
+  }));
+}
+
 api.post('/lobbies/:code/start', async (c) => {
   const code = c.req.param('code');
   const lobby = await getLobbyByCode(code);
@@ -88,26 +123,7 @@ api.post('/lobbies/:code/start', async (c) => {
 
   await setLobbyState(lobby.id, 'starting');
 
-  // Fetch real tracks from Deezer for the match deck
-  let tracks: CatalogTrack[];
-  try {
-    tracks = await catalogService.getChartTracks(50);
-  } catch {
-    tracks = [];
-  }
-  const deck = tracks.length > 0
-    ? tracks.map((t) => ({
-        id: t.id,
-        title: t.title,
-        artist: t.artist,
-        year: t.year,
-        genre: t.genre,
-        emoji: '🎵',
-        previewUrl: t.previewUrl ?? undefined,
-        coverUrl: t.coverUrl ?? undefined,
-        gradient: 'linear-gradient(135deg, #1e1c2e, #13121f)',
-      }))
-    : undefined; // fallback: DO will use MOCK_TRACKS
+  const deck = await buildChartDeck(c.env);
 
   // Pre-seed the Durable Object with the deck
   const doId = c.env.MATCH_ROOM.idFromName(lobby.id);
@@ -185,21 +201,8 @@ api.post('/games/:code/start', async (c) => {
   const lobby = await getLobbyByCode(code);
   if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
 
-  // Pre-seed the deck with Deezer chart tracks (have preview URLs)
-  let tracks: CatalogTrack[];
-  try {
-    tracks = await catalogService.getChartTracks(50);
-  } catch {
-    tracks = [];
-  }
-  const deck = tracks.length > 0
-    ? tracks.map((t) => ({
-        id: t.id, title: t.title, artist: t.artist, year: t.year,
-        genre: t.genre, emoji: '🎵', previewUrl: t.previewUrl ?? undefined,
-        coverUrl: t.coverUrl ?? undefined,
-        gradient: 'linear-gradient(135deg, #1e1c2e, #13121f)',
-      }))
-    : undefined;
+  // Pre-seed the deck with chart tracks (preview URLs + corrected years)
+  const deck = await buildChartDeck(c.env);
 
   // Init deck
   await sendToDO(c.env, lobby.id, 'init-deck', { deck });
