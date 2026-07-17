@@ -30,9 +30,11 @@ export class CatalogService {
       console.log(`[CatalogService] Jamendo provider registered`);
     }
 
-    // Deezer is primary — iTunes's Search API rate-limits Cloudflare Workers'
-    // shared egress IPs almost immediately (429), so it can't serve as primary.
-    this.primaryProviderName = 'deezer';
+    // iTunes is primary: it's the only provider with correct ORIGINAL release
+    // years (Deezer often returns compilation/re-release dates). But iTunes
+    // rate-limits Cloudflare Workers' shared egress IPs (429), so every lookup
+    // falls back to Deezer (real previews, approximate years) before mock.
+    this.primaryProviderName = 'itunes';
   }
 
   getProvider(name?: string): CatalogProvider {
@@ -55,24 +57,41 @@ export class CatalogService {
   }
 
   /**
-   * Search across the primary provider. Falls back to mock if Deezer fails.
+   * Run a lookup through the real-provider fallback chain:
+   * primary (itunes) → deezer. Returns null if every provider
+   * errors or comes back empty, so callers can fall back to mock.
    */
-  async searchTracks(query: string, limit = 25): Promise<CatalogTrack[]> {
-    try {
-      const primary = this.getPrimaryProvider();
-      const results = await primary.searchTracks(query, limit);
-      if (results.length > 0) return results;
-    } catch (err) {
-      console.warn(`[CatalogService] Primary provider failed:`, err);
+  private async tryRealProviders(
+    label: string,
+    lookup: (provider: CatalogProvider) => Promise<CatalogTrack[]>
+  ): Promise<CatalogTrack[] | null> {
+    const chain = [...new Set([this.primaryProviderName, 'deezer'])];
+    for (const name of chain) {
+      const provider = this.providers.get(name);
+      if (!provider) continue;
+      try {
+        const results = await lookup(provider);
+        if (results.length > 0) return results;
+        console.warn(`[CatalogService] ${name} ${label} returned no results`);
+      } catch (err) {
+        console.warn(`[CatalogService] ${name} ${label} failed:`, err);
+      }
     }
-
-    // Fallback to mock
-    console.warn(`[CatalogService] Falling back to mock provider`);
-    return this.getMockProvider().searchTracks(query, limit);
+    console.warn(`[CatalogService] All real providers failed for ${label}, falling back to mock`);
+    return null;
   }
 
   /**
-   * Get a single track, trying providers in order.
+   * Search across providers: itunes → deezer → mock.
+   */
+  async searchTracks(query: string, limit = 25): Promise<CatalogTrack[]> {
+    const results = await this.tryRealProviders('search', (p) => p.searchTracks(query, limit));
+    return results ?? this.getMockProvider().searchTracks(query, limit);
+  }
+
+  /**
+   * Get a single track. IDs are provider-prefixed (itunes-/deezer-/m…),
+   * so route directly to the owning provider, then fall back to mock.
    */
   async getTrack(id: string): Promise<CatalogTrack | null> {
     // If it's a mock ID, go directly to mock
@@ -80,11 +99,15 @@ export class CatalogService {
       return this.getMockProvider().getTrack(id);
     }
 
-    try {
-      const result = await this.getPrimaryProvider().getTrack(id);
-      if (result) return result;
-    } catch {
-      // fall through to mock
+    const owner = id.startsWith('deezer-') ? 'deezer' : id.startsWith('itunes-') ? 'itunes' : this.primaryProviderName;
+    const provider = this.providers.get(owner);
+    if (provider) {
+      try {
+        const result = await provider.getTrack(id);
+        if (result) return result;
+      } catch {
+        // fall through to mock
+      }
     }
 
     return this.getMockProvider().getTrack(id);
@@ -94,21 +117,16 @@ export class CatalogService {
    * Get preview URL for a track.
    */
   async getPreviewUrl(trackId: string): Promise<string | null> {
-    return this.getPrimaryProvider().getPreviewUrl(trackId);
+    const track = await this.getTrack(trackId);
+    return track?.previewUrl ?? null;
   }
 
   /**
-   * Get chart/top tracks from the primary provider.
+   * Get chart/top tracks: itunes → deezer → mock.
    */
   async getChartTracks(limit = 25): Promise<CatalogTrack[]> {
-    try {
-      const primary = this.getPrimaryProvider();
-      const results = await primary.getChartTracks(limit);
-      if (results.length > 0) return results;
-    } catch (err) {
-      console.warn('[CatalogService] Chart fetch failed:', err);
-    }
-    return this.getMockProvider().getChartTracks(limit);
+    const results = await this.tryRealProviders('chart', (p) => p.getChartTracks(limit));
+    return results ?? this.getMockProvider().getChartTracks(limit);
   }
 }
 

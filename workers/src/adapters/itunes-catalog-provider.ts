@@ -23,6 +23,15 @@ function extractYear(releaseDate: string): number {
   return isNaN(year) ? 2000 : year;
 }
 
+// Apple heavily rate-limits Cloudflare Workers' shared egress IPs (429), so
+// cache every successful response at the edge for 24h and reuse it as long as
+// possible instead of re-hitting Apple. Identical URLs (e.g. the fixed chart
+// queries) then only reach Apple once per colo per day.
+const ITUNES_FETCH_INIT: RequestInit<RequestInitCfProperties> = {
+  headers: { 'Accept': 'application/json' },
+  cf: { cacheEverything: true, cacheTtl: 86400 },
+};
+
 function itunesToCatalogTrack(track: ITunesTrack): CatalogTrack {
   return {
     id: `itunes-${track.trackId}`,
@@ -52,9 +61,7 @@ export class ITunesCatalogProvider implements CatalogProvider {
     const url = `${this.baseUrl}?term=${encoded}&limit=${Math.min(limit, 50)}&entity=song`;
 
     try {
-      const res = await fetch(url, {
-        headers: { 'Accept': 'application/json' },
-      });
+      const res = await fetch(url, ITUNES_FETCH_INIT);
 
       if (!res.ok) {
         console.warn(`[ITunesCatalogProvider] search failed: ${res.status}`);
@@ -80,9 +87,7 @@ export class ITunesCatalogProvider implements CatalogProvider {
     const url = `${this.baseUrl}?id=${itunesId}&entity=song`;
 
     try {
-      const res = await fetch(url, {
-        headers: { 'Accept': 'application/json' },
-      });
+      const res = await fetch(url, ITUNES_FETCH_INIT);
 
       if (!res.ok) return null;
 
@@ -117,7 +122,7 @@ export class ITunesCatalogProvider implements CatalogProvider {
       if (allTracks.length >= limit) break;
       try {
         const url = `${this.baseUrl}?term=${q}&limit=${Math.min(limit, 20)}&entity=song`;
-        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        const res = await fetch(url, ITUNES_FETCH_INIT);
         if (res.ok) {
           const body = (await res.json()) as ITunesSearchResult;
           if (body.results) {
