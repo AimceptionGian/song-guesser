@@ -2,6 +2,7 @@
 
 export interface Env {
   MATCH_ROOM: DurableObjectNamespace;
+  LOBBY_REGISTRY: DurableObjectNamespace;
   JAMENDO_CLIENT_ID?: string;
   // Spotify integration (optional – for history sync only)
   SPOTIFY_CLIENT_ID?: string;

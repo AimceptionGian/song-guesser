@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import api from './routes/api';
 import { MatchRoom } from './durable-objects/match-room';
+import { LobbyRegistry } from './durable-objects/lobby-registry';
 import { createRepositoryContext } from './db/repositories/context';
 import { setLobbyRepository } from './services/lobby-service';
 import { setSessionRepository } from './services/auth-service';
@@ -30,7 +31,7 @@ app.route('/api', api);
 app.get('/', (c) => c.redirect('/api/health'));
 
 // Durable Object exports (required for Wrangler dev & deployment)
-export { MatchRoom };
+export { MatchRoom, LobbyRegistry };
 
 // Fallback
 app.notFound((c) => c.json({ error: 'Not found' }, 404));

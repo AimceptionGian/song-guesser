@@ -6,6 +6,7 @@ import type { Env } from '../../env';
 import type { LobbyRepository, SessionRepository, MatchStateRepository, Repository } from './repository';
 import { InMemoryLobbyRepository, InMemorySessionRepository } from './in-memory-repository';
 import { MongoLobbyRepository, MongoSessionRepository, MongoMatchStateRepository } from './mongo-repository';
+import { DurableObjectLobbyRepository } from './durable-object-repository';
 import type { MatchState } from '../../types';
 
 export interface RepositoryContext {
@@ -25,6 +26,20 @@ export function createRepositoryContext(env: Env): RepositoryContext {
       lobbies: new MongoLobbyRepository(env),
       sessions: new MongoSessionRepository(env),
       matchStates: new MongoMatchStateRepository(env),
+    };
+  }
+
+  // Lobbies must be visible across every isolate/colo a request can land on
+  // (that's the whole multiplayer problem — see lobby-registry.ts), so the
+  // Durable Object–backed registry is the default whenever it's bound, even
+  // without MongoDB configured. Sessions/matchStates aren't read across
+  // requests in a way that's affected the same way, so they stay in-memory.
+  if (env.LOBBY_REGISTRY) {
+    console.log('[Repository] Using Durable Object lobby registry');
+    return {
+      lobbies: new DurableObjectLobbyRepository(env),
+      sessions: new InMemorySessionRepository(),
+      matchStates: new InMemoryMatchStateRepository(),
     };
   }
 
