@@ -28,6 +28,21 @@ export default function GameScreen() {
 
   const currentPlayer = players[currentPlayerIndex] || players[0];
 
+  // ─── Sync placedYears from current player's placedCards ───
+  useEffect(() => {
+    const p = players[currentPlayerIndex];
+    if (p?.placedCards?.length) {
+      setPlacedYears(p.placedCards.map((pc) => ({
+        year: (pc as any).song?.year ?? (pc as any).card?.year ?? pc.placedYear,
+        isCorrect: pc.isCorrect,
+        emoji: (pc as any).song?.emoji ?? (pc as any).card?.emoji ?? '🎵',
+        title: (pc as any).song?.title ?? (pc as any).card?.title ?? '',
+      })));
+    } else {
+      setPlacedYears([]);
+    }
+  }, [players, currentPlayerIndex]);
+
   // ─── Restore or initialise match state ───
   useEffect(() => {
     if (!gameCode) { navigate('/', { replace: true }); return; }
@@ -41,16 +56,6 @@ export default function GameScreen() {
       if (typeof incoming.currentPlayerIndex === 'number') setCurrentPlayerIndex(incoming.currentPlayerIndex);
       if (typeof incoming.round === 'number') setRound(incoming.round as number);
       setGameStarted(true);
-      // Restore placed cards from current player's state (handle both frontend {song} and backend {card} format)
-      const p = restoredPlayers[incoming.currentPlayerIndex as number] || restoredPlayers[0];
-      if (p?.placedCards?.length) {
-        setPlacedYears(p.placedCards.map((pc) => ({
-          year: pc.placedYear,
-          isCorrect: pc.isCorrect,
-          emoji: (pc as any).song?.emoji ?? (pc as any).card?.emoji ?? '🎵',
-          title: (pc as any).song?.title ?? (pc as any).card?.title ?? '',
-        })));
-      }
       return;
     }
 
@@ -152,21 +157,21 @@ export default function GameScreen() {
     const yearExact = timelineYear === currentCard.year;
     const yearDiff = Math.abs(timelineYear - currentCard.year);
 
-    // Timeline bucket check: where does this fit relative to already placed correct cards?
+    // Timeline bucket check relative to ALL already placed cards (they all stay
+    // visible on the timeline). An empty timeline is always correct.
     const myPlayer = players[currentPlayerIndex];
-    const existingCorrectYears = myPlayer
-      ? myPlayer.placedCards.filter((pc) => pc.isCorrect).map((pc) => pc.song.year)
+    const existingYears = myPlayer
+      ? myPlayer.placedCards
+          .map((pc) => (pc as any).song?.year ?? (pc as any).card?.year)
+          .filter((y): y is number => typeof y === 'number')
       : [];
 
-    let timelineCorrect = false;
-    if (existingCorrectYears.length > 0) {
-      const sortedExisting = [...existingCorrectYears].sort((a, b) => a - b);
+    let timelineCorrect = true;
+    if (existingYears.length > 0) {
+      const sortedExisting = [...existingYears].sort((a, b) => a - b);
       const correctBucket = getBucket(currentCard.year, sortedExisting);
       const guessedBucket = getBucket(timelineYear, sortedExisting);
       timelineCorrect = correctBucket === guessedBucket;
-    } else {
-      // First card: timeline point always earned if years match
-      timelineCorrect = timelineYear === currentCard.year;
     }
 
     const points = (artistCorrect ? 1 : 0) + (titleCorrect ? 1 : 0) + (yearExact ? 1 : 0) + (timelineCorrect ? 1 : 0);
@@ -181,12 +186,6 @@ export default function GameScreen() {
         { song: currentCard, placedYear: timelineYear, isCorrect: timelineCorrect },
       ],
     };
-    setPlacedYears((prev) => [...prev, {
-      year: timelineYear,
-      isCorrect: timelineCorrect,
-      emoji: currentCard.emoji,
-      title: currentCard.title,
-    }]);
     try {
       await api.submitGuess(gameCode, {
         playerId: currentPlayer?.id || 'local-player',
@@ -268,7 +267,7 @@ export default function GameScreen() {
           >
             <div
               style={{
-                height: 'clamp(120px, 25vw, 160px)',
+                height: 'clamp(64px, 14vw, 84px)',
                 background: currentCard.gradient,
                 backgroundSize: 'cover',
                 backgroundPosition: 'center',
@@ -276,42 +275,41 @@ export default function GameScreen() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: 'clamp(44px, 10vw, 60px)',
+                fontSize: 'clamp(28px, 6vw, 36px)',
               }}
             >
               <div
                 style={{
                   position: 'absolute',
-                  top: 10,
-                  left: 10,
-                  padding: '4px 10px',
+                  top: 8,
+                  left: 8,
+                  padding: '3px 8px',
                   borderRadius: 8,
                   background: 'rgba(247,37,133,0.7)',
                   backdropFilter: 'blur(4px)',
                   fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: '0.7rem',
+                  fontSize: '0.65rem',
                   color: 'white',
                   border: '1px solid rgba(255,255,255,0.15)',
                 }}
               >
                 🎵 Aktuelle Karte
               </div>
-              {currentCard.emoji}
+              🎵
             </div>
-            <div style={{ padding: 'clamp(10px, 2.5vw, 16px)', display: 'grid', gap: 4 }}>
-              <div style={{ fontSize: 22 }}>{currentCard.emoji}</div>
+            <div style={{ padding: 'clamp(8px, 2vw, 12px)', display: 'grid', gap: 2 }}>
               <div
                 style={{
                   fontFamily: "'Bebas Neue', sans-serif",
-                  fontSize: 'clamp(1.2rem, 4vw, 1.5rem)',
+                  fontSize: 'clamp(1.05rem, 3.5vw, 1.3rem)',
                   letterSpacing: '0.02em',
                   color: '#f0eeff',
                 }}
               >
                 ??? — ???
               </div>
-              <div style={{ color: '#8b7fb8', fontSize: 'clamp(0.72rem, 2vw, 0.8rem)' }}>
-                <span style={{ color: '#c4b8ff' }}>{currentCard.genre}</span> · Erscheinungsjahr raten
+              <div style={{ color: '#8b7fb8', fontSize: 'clamp(0.7rem, 2vw, 0.78rem)' }}>
+                Erscheinungsjahr raten
               </div>
             </div>
           </div>

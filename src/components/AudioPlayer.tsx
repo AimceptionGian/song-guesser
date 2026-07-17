@@ -62,6 +62,18 @@ function getFallbackUrl(): string {
   return cachedFallbackUrl;
 }
 
+const VOLUME_STORAGE_KEY = 'songguesser-volume';
+
+function loadStoredVolume(): number {
+  try {
+    const stored = localStorage.getItem(VOLUME_STORAGE_KEY);
+    const v = stored === null ? NaN : Number(stored);
+    return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 0.8;
+  } catch {
+    return 0.8;
+  }
+}
+
 export default function AudioPlayer({ previewUrl, songTitle, artistName }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -69,6 +81,8 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [hasError, setHasError] = useState(false);
+  const [volume, setVolume] = useState(loadStoredVolume);
+  const lastVolumeRef = useRef(volume > 0 ? volume : 0.8);
 
   // Use previewUrl if available, otherwise use generated fallback tone
   const effectiveUrl = previewUrl || getFallbackUrl();
@@ -120,6 +134,21 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
       audioRef.current = null;
     };
   }, [effectiveUrl]);
+
+  // Apply volume to the (possibly recreated) audio element and persist it
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = volume;
+    if (volume > 0) lastVolumeRef.current = volume;
+    try {
+      localStorage.setItem(VOLUME_STORAGE_KEY, String(volume));
+    } catch {
+      // localStorage unavailable (e.g. private mode) — volume just won't persist
+    }
+  }, [volume, effectiveUrl]);
+
+  const toggleMute = useCallback(() => {
+    setVolume((v) => (v > 0 ? 0 : lastVolumeRef.current));
+  }, []);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
@@ -254,6 +283,41 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
       >
         {noAudio ? 'Keine Vorschau' : `${formatTime(displayCurrent)} / ${formatTime(displayDuration)}`}
       </span>
+
+      {/* Volume */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        <button
+          onClick={toggleMute}
+          disabled={noAudio}
+          title={volume > 0 ? 'Stummschalten' : 'Ton an'}
+          style={{
+            border: 'none',
+            background: 'none',
+            padding: 0,
+            cursor: noAudio ? 'default' : 'pointer',
+            fontSize: 15,
+            lineHeight: 1,
+          }}
+        >
+          {volume === 0 ? '🔇' : volume < 0.5 ? '🔉' : '🔊'}
+        </button>
+        <input
+          type="range"
+          className="volume-slider"
+          min={0}
+          max={1}
+          step={0.05}
+          value={volume}
+          disabled={noAudio}
+          onChange={(e) => setVolume(Number(e.target.value))}
+          title={`Lautstärke: ${Math.round(volume * 100)}%`}
+          style={{
+            width: 74,
+            background: `linear-gradient(90deg, #7c3aed 0%, #a855f7 ${volume * 100}%, rgba(168,85,247,0.15) ${volume * 100}%)`,
+            cursor: noAudio ? 'default' : 'pointer',
+          }}
+        />
+      </div>
     </div>
   );
 }

@@ -21,21 +21,18 @@ export interface PlacedCardInfo {
   title?: string;
 }
 
-// Collision resolution: assign each card to a row so cards don't overlap
-function assignRows(cards: PlacedCardInfo[]): PlacedCardInfo[] {
+const CARD_WIDTH = 84;
+const CARD_GAP = 10;
+
+// Layout cards: one centered row sorted by year, pixel-spaced by card width
+// so cards can never overlap (same-year cards simply sit next to each other).
+function layoutCards(cards: PlacedCardInfo[]): (PlacedCardInfo & { offsetPx: number })[] {
   const sorted = [...cards].sort((a, b) => a.year - b.year);
-  const rows: number[] = []; // midpoints of each occupied row (in year-space)
-  const assigned = sorted.map((card) => {
-    // Find first row that doesn't overlap (±6 years from any card in that row)
-    let rowIdx = 0;
-    for (; rowIdx < rows.length; rowIdx++) {
-      if (Math.abs(card.year - rows[rowIdx]) > 7) break;
-    }
-    if (rowIdx >= rows.length) rows.push(card.year);
-    else rows[rowIdx] = card.year;
-    return { ...card, _row: rowIdx };
-  });
-  return assigned as any;
+  const n = sorted.length;
+  return sorted.map((card, i) => ({
+    ...card,
+    offsetPx: (i - (n - 1) / 2) * (CARD_WIDTH + CARD_GAP),
+  }));
 }
 
 export default function Timeline({
@@ -94,10 +91,9 @@ export default function Timeline({
     setDragging(false);
   }, []);
 
-  // Assign cards to rows to prevent visual overlap
-  const rowCards = useMemo(() => assignRows(placedCards), [placedCards]);
-  const rowCount = rowCards.length > 0 ? Math.max(...rowCards.map((c: any) => c._row)) + 1 : 0;
-  const cardsHeight = rowCount * 72 + 16;
+  // Layout cards: evenly spaced, centered on timeline
+  const laidOutCards = useMemo(() => layoutCards(placedCards), [placedCards]);
+  const cardsHeight = 100;
 
   return (
     <div
@@ -134,7 +130,7 @@ export default function Timeline({
         </span>
       </div>
 
-      {/* Placed cards — grid layout with stem lines to exact year */}
+      {/* Placed cards — all at same Y, same-year cards side by side */}
       <div
         style={{
           position: 'relative',
@@ -142,19 +138,15 @@ export default function Timeline({
           marginBottom: 0,
         }}
       >
-        {(rowCards as any[]).map((card: any, i: number) => {
-          const left = yearToPercent(card.year);
-          // Each row is ~66px tall, cards sit at their row
-          const cardTop = rowCount > 1 ? (card._row / (rowCount - 1)) * 50 : 0;
-          const stemHeight = Math.max(8, 56 - cardTop);
+        {laidOutCards.map((card, i) => {
           return (
             <div
               key={i}
               style={{
                 position: 'absolute',
-                left: `${left}%`,
-                transform: 'translateX(-50%)',
-                top: cardTop,
+                left: '50%',
+                transform: `translateX(calc(-50% + ${card.offsetPx}px))`,
+                top: 8,
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
@@ -164,7 +156,7 @@ export default function Timeline({
               {/* Mini card with year */}
               <div
                 style={{
-                  width: 62,
+                  width: CARD_WIDTH,
                   borderRadius: 8,
                   border: `1px solid ${card.isCorrect ? 'rgba(6,214,160,0.5)' : 'rgba(168,85,247,0.35)'}`,
                   background: '#13121f',
@@ -173,7 +165,7 @@ export default function Timeline({
               >
                 <div
                   style={{
-                    height: 26,
+                    height: 36,
                     display: 'grid',
                     placeItems: 'center',
                     background: card.isCorrect
@@ -181,48 +173,28 @@ export default function Timeline({
                       : 'rgba(168,85,247,0.08)',
                   }}
                 >
-                  <span style={{ fontSize: 13 }}>{card.emoji || '🎵'}</span>
+                  <span style={{ fontSize: 18 }}>{card.emoji || '🎵'}</span>
                 </div>
-                <div style={{ padding: '2px 4px', textAlign: 'center' }}>
+                <div style={{ padding: '3px 5px', textAlign: 'center' }}>
                   <div style={{
                     fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: '0.5rem',
+                    fontSize: '0.62rem',
                     color: '#8b7fb8',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
                   }}>
-                    {card.title ? card.title.substring(0, 10) : ''}
+                    {card.title || ''}
                   </div>
                   <div style={{
                     fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: '0.55rem',
+                    fontSize: '0.72rem',
                     color: card.isCorrect ? '#06d6a0' : '#a855f7',
                     fontWeight: 600,
                   }}>
                     {card.year}
                   </div>
                 </div>
-              </div>
-              {/* Stem line + dot */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                <div
-                  style={{
-                    width: 1,
-                    height: stemHeight,
-                    background: card.isCorrect
-                      ? 'rgba(6,214,160,0.35)'
-                      : 'rgba(168,85,247,0.3)',
-                  }}
-                />
-                <div
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    background: card.isCorrect ? '#06d6a0' : '#a855f7',
-                    boxShadow: card.isCorrect
-                      ? '0 0 6px rgba(6,214,160,0.5)'
-                      : '0 0 6px rgba(168,85,247,0.5)',
-                  }}
-                />
               </div>
             </div>
           );

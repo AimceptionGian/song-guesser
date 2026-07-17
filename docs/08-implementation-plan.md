@@ -37,8 +37,8 @@ Plan and track implementation slices aligned with approved test packages.
 
 ### 🐛 Noch offen / in Arbeit (Stand 2026-07-05)
 - [x] **Doppelte Eingabefelder (#6)** — Interpret- und Songtitel-Inputs sind doppelt vorhanden, wenn eine Karte gezogen wurde. Vermutlich wurde der alte `<div className="grid-2">`-Block nicht vollständig durch den neuen `{currentCard && (...)}`-Block ersetzt.
-- [ ] **Karten stapeln sich auf Timeline (#7)** — Bereits gezogene/platzierte Karten überlagern sich. Die Kollisionserkennung (`assignRows`) ist im Code, aber die Timeline-Komponente rendert die Karten noch nicht korrekt im Grid. Muss überarbeitet werden.
-- [ ] **Timeline-Karten-Grid (#3)** — Timeline hat neuen Code mit Kollisionserkennung (`assignRows`), Jahreszahl auf Karte, Stem-Lines. Muss deployed und getestet werden.
+- [x] **Karten stapeln sich auf Timeline (#7)** — Behoben: `assignRows` durch `layoutCards` ersetzt. Alle Karten auf gleicher Y-Höhe, Same-Year-Karten nebeneinander, Stem-Lines entfernt.
+- [x] **Timeline-Karten-Grid (#3)** — Behoben: Karten werden nach **echtem Jahr** sortiert mit Mindestabstand (10% = ~70px). Same-Year-Karten werden horizontal gespreadet. `placedYears` speichert jetzt `currentCard.year` statt `timelineYear`.
 
 ### 🔧 Infrastructure
 - [x] Install Vitest and set up test infrastructure (frontend + backend)
