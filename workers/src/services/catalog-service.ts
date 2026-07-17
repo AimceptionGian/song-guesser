@@ -30,9 +30,9 @@ export class CatalogService {
       console.log(`[CatalogService] Jamendo provider registered`);
     }
 
-    // iTunes is primary (correct original years + preview URLs);
-    // Deezer and Mock serve as fallbacks
-    this.primaryProviderName = 'itunes';
+    // Deezer is primary — iTunes's Search API rate-limits Cloudflare Workers'
+    // shared egress IPs almost immediately (429), so it can't serve as primary.
+    this.primaryProviderName = 'deezer';
   }
 
   getProvider(name?: string): CatalogProvider {

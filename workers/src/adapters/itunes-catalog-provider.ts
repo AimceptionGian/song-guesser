@@ -129,9 +129,11 @@ export class ITunesCatalogProvider implements CatalogProvider {
               }
             }
           }
+        } else {
+          console.warn(`[ITunesCatalogProvider] getChartTracks query "${q}" failed: ${res.status}`);
         }
-      } catch {
-        // continue with next query
+      } catch (err) {
+        console.warn(`[ITunesCatalogProvider] getChartTracks query "${q}" error:`, err);
       }
     }
 
