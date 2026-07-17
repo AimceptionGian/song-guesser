@@ -149,19 +149,17 @@ describe('DeezerCatalogProvider', () => {
   });
 
   describe('getChartTracks', () => {
-    it('should return normalized chart tracks', async () => {
-      // Mock chart endpoint
-      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+    it('should return normalized chart tracks from a single chart fetch', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
         new Response(JSON.stringify(mockSearchPayload), { status: 200 })
-      );
-      // Mock individual track detail fetches (chart endpoint has no release_date)
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-        new Response(JSON.stringify(mockSearchPayload.data[0]), { status: 200 })
       );
 
       const results = await provider.getChartTracks(2);
       expect(results).toHaveLength(2);
       expect(results[0].artist).toBe('Michael Jackson');
+      expect(results[0].year).toBe(1982);
+      // No per-track detail fetch — the caller corrects years via Spotify instead
+      expect(fetchSpy).toHaveBeenCalledOnce();
     });
   });
 });

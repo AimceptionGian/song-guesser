@@ -102,7 +102,7 @@ export async function getOriginalYear(artist: string, title: string, token: stri
 
   const cleaned = cleanTitle(title);
   const query = encodeURIComponent(`track:"${cleaned}" artist:"${artist.replace(/"/g, '')}"`);
-  const url = `https://api.spotify.com/v1/search?type=track&limit=20&q=${query}`;
+  const url = `https://api.spotify.com/v1/search?q=${query}&type=track`;
 
   let year: number | null = null;
   try {
@@ -117,7 +117,8 @@ export async function getOriginalYear(artist: string, title: string, token: stri
         .filter((y): y is number => y !== null);
       if (years.length > 0) year = Math.min(...years);
     } else {
-      console.warn(`[SpotifyYear] search failed for "${artist} – ${title}": ${res.status}`);
+      const body = await res.text().catch(() => '');
+      console.warn(`[SpotifyYear] search failed for "${artist} – ${title}" (url=${url}): ${res.status} ${body}`);
       // Don't cache transient failures (429/5xx)
       if (res.status === 429 || res.status >= 500) return null;
     }

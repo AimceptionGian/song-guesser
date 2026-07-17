@@ -170,8 +170,11 @@ export class DeezerCatalogProvider implements CatalogProvider {
   }
 
   /**
-   * Fetch Deezer chart (global top tracks) and enrich with release dates.
-   * Chart endpoint doesn't include release_date, so we fetch track details in parallel.
+   * Fetch Deezer chart (global top tracks).
+   * Chart entries carry no reliable release_date — the caller (buildChartDeck)
+   * corrects the year via Spotify, so we don't spend a subrequest per track
+   * fetching Deezer's own track detail here (Workers cap subrequests per
+   * invocation, and that budget is needed for the Spotify lookups instead).
    */
   async getChartTracks(limit = 10): Promise<CatalogTrack[]> {
     const url = `${this.baseUrl}/chart/0/tracks?limit=${Math.min(limit, 50)}`;
@@ -186,25 +189,7 @@ export class DeezerCatalogProvider implements CatalogProvider {
       const body = (await res.json()) as DeezerSearchResult;
       if (!body.data || body.data.length === 0) return [];
 
-      // Chart data has no release_date — fetch each track's detail in parallel
-      const enriched = await Promise.all(
-        body.data.map(async (track) => {
-          try {
-            const detailRes = await fetch(`${this.baseUrl}/track/${track.id}`, {
-              headers: { 'Accept': 'application/json' },
-            });
-            if (detailRes.ok) {
-              const detail = (await detailRes.json()) as DeezerTrack;
-              return deezerToCatalogTrack(detail);
-            }
-          } catch {
-            // fall through to chart data
-          }
-          return deezerToCatalogTrack(track);
-        })
-      );
-
-      return enriched;
+      return body.data.map(deezerToCatalogTrack);
     } catch (err) {
       console.warn(`[DeezerCatalogProvider] getChartTracks error:`, err);
       return [];

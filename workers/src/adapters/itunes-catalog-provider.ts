@@ -136,6 +136,9 @@ export class ITunesCatalogProvider implements CatalogProvider {
           }
         } else {
           console.warn(`[ITunesCatalogProvider] getChartTracks query "${q}" failed: ${res.status}`);
+          // A 429 is an IP-level block — every other query will fail the same
+          // way, so stop burning the Worker's per-invocation subrequest budget.
+          if (res.status === 429) break;
         }
       } catch (err) {
         console.warn(`[ITunesCatalogProvider] getChartTracks query "${q}" error:`, err);

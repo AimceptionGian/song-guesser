@@ -81,6 +81,11 @@ api.post('/lobbies/:code/leave', async (c) => {
   return c.json({ success: true });
 });
 
+// Deck size: big enough for the default game length (4 players × 5 rounds =
+// 20 draws) with headroom, small enough that chart fetch + Spotify year
+// lookups stay well under the Worker's per-invocation subrequest cap.
+const DECK_SIZE = 30;
+
 /**
  * Build the match deck: chart tracks from the catalog chain (itunes→deezer→mock),
  * with release years corrected via Spotify (the chart providers often report
@@ -90,7 +95,7 @@ api.post('/lobbies/:code/leave', async (c) => {
 async function buildChartDeck(env: Env) {
   let tracks: CatalogTrack[];
   try {
-    tracks = await catalogService.getChartTracks(50);
+    tracks = await catalogService.getChartTracks(DECK_SIZE);
   } catch {
     tracks = [];
   }
