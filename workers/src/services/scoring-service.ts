@@ -19,8 +19,8 @@ function getTimelineBucket(year: number, sortedYears: number[]): number {
  * - 1 point: Exact year correct
  * - 1 point: Correct timeline placement relative to player's existing cards
  *
- * existingCorrectYears: the correct years of cards the player already placed.
- *   Used to determine if the guessed year is in the correct bucket.
+ * existingYears: the actual years of all cards the player already placed
+ *   (they all stay visible on the timeline, so they all anchor the buckets).
  * Total: 0–4 points per guess.
  */
 export function calculateFullScore(
@@ -28,22 +28,20 @@ export function calculateFullScore(
   correctArtist: string,
   correctTitle: string,
   correctYear: number,
-  existingCorrectYears: number[] = []
+  existingYears: number[] = []
 ): ScoreResult {
   const artistCorrect = submission.guessedArtist.trim().toLowerCase() === correctArtist.trim().toLowerCase();
   const titleCorrect = submission.guessedTitle.trim().toLowerCase() === correctTitle.trim().toLowerCase();
   const yearExact = submission.guessedYear === correctYear;
 
   // Timeline placement: is guessedYear in the correct bucket?
-  let timelineCorrect = false;
-  if (existingCorrectYears.length > 0) {
-    const sortedExisting = [...existingCorrectYears].sort((a, b) => a - b);
+  // An empty timeline has only one bucket, so the first card is always correct.
+  let timelineCorrect = true;
+  if (existingYears.length > 0) {
+    const sortedExisting = [...existingYears].sort((a, b) => a - b);
     const correctBucket = getTimelineBucket(correctYear, sortedExisting);
     const guessedBucket = getTimelineBucket(submission.guessedYear, sortedExisting);
     timelineCorrect = correctBucket === guessedBucket;
-  } else {
-    // First card: always get the timeline point if years match
-    timelineCorrect = submission.guessedYear === correctYear;
   }
 
   const artistPoints = artistCorrect ? 1 : 0;

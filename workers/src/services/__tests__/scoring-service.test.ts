@@ -33,6 +33,7 @@ describe('calculateFullScore — 4×1 point system', () => {
   });
 
   it('should award 0 points for a completely wrong guess', () => {
+    // Existing card at 1950: correct year 1968 → bucket 1, guessed 1900 → bucket 0 → wrong
     const result = calculateFullScore(
       makeSubmission({
         guessedArtist: 'Some Wrong Band',
@@ -41,7 +42,8 @@ describe('calculateFullScore — 4×1 point system', () => {
       }),
       CORRECT_ARTIST,
       CORRECT_TITLE,
-      CORRECT_YEAR
+      CORRECT_YEAR,
+      [1950]
     );
 
     expect(result.artistCorrect).toBe(false);
@@ -97,6 +99,7 @@ describe('calculateFullScore — 4×1 point system', () => {
   });
 
   it('should award 1 point when only artist is correct', () => {
+    // Existing card at 1970: correct year 1968 → bucket 0, guessed 1999 → bucket 1 → wrong
     const result = calculateFullScore(
       makeSubmission({
         guessedArtist: CORRECT_ARTIST,
@@ -105,7 +108,8 @@ describe('calculateFullScore — 4×1 point system', () => {
       }),
       CORRECT_ARTIST,
       CORRECT_TITLE,
-      CORRECT_YEAR
+      CORRECT_YEAR,
+      [1970]
     );
 
     expect(result.artistCorrect).toBe(true);
@@ -120,6 +124,7 @@ describe('calculateFullScore — 4×1 point system', () => {
   });
 
   it('should award 2 points for artist + title but wrong year', () => {
+    // Existing card at 1970: correct year 1968 → bucket 0, guessed 1999 → bucket 1 → wrong
     const result = calculateFullScore(
       makeSubmission({
         guessedArtist: CORRECT_ARTIST,
@@ -128,7 +133,8 @@ describe('calculateFullScore — 4×1 point system', () => {
       }),
       CORRECT_ARTIST,
       CORRECT_TITLE,
-      CORRECT_YEAR
+      CORRECT_YEAR,
+      [1970]
     );
 
     expect(result.artistCorrect).toBe(true);
@@ -136,6 +142,45 @@ describe('calculateFullScore — 4×1 point system', () => {
     expect(result.yearExact).toBe(false);
     expect(result.timelineCorrect).toBe(false);
     expect(result.points).toBe(2);
+  });
+
+  it('should always award the timeline point for the first card (empty timeline)', () => {
+    const result = calculateFullScore(
+      makeSubmission({
+        guessedArtist: 'Wrong',
+        guessedTitle: 'Wrong',
+        guessedYear: 1900,
+      }),
+      CORRECT_ARTIST,
+      CORRECT_TITLE,
+      CORRECT_YEAR,
+      []
+    );
+
+    expect(result.yearExact).toBe(false);
+    expect(result.timelineCorrect).toBe(true);
+    expect(result.breakdown.timelinePoints).toBe(1);
+    expect(result.points).toBe(1);
+  });
+
+  it('should judge the bucket against ALL placed cards, not just correct ones', () => {
+    // Card at 1966 already on the timeline (however it was placed).
+    // Correct year 1985 → after 1966; guessed 1988 → also after 1966 → point earned.
+    const result = calculateFullScore(
+      makeSubmission({
+        guessedArtist: 'Wrong',
+        guessedTitle: 'Wrong',
+        guessedYear: 1988,
+      }),
+      CORRECT_ARTIST,
+      CORRECT_TITLE,
+      1985,
+      [1966]
+    );
+
+    expect(result.timelineCorrect).toBe(true);
+    expect(result.breakdown.timelinePoints).toBe(1);
+    expect(result.points).toBe(1);
   });
 
   describe('timeline placement with existing cards', () => {

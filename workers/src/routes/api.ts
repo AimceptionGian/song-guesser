@@ -14,6 +14,7 @@ import { catalogService } from '../services/catalog-service';
 import { createSession, extractTokenFromRequest, validateSession } from '../services/auth-service';
 import { historyService } from '../services/history-service';
 import type { HistoryTrack } from '../adapters/history-provider';
+import type { CatalogTrack } from '../adapters/catalog-provider';
 import type { CreateLobbyRequest, JoinLobbyRequest, Lobby } from '../types';
 import type { Env } from '../env';
 
@@ -88,7 +89,7 @@ api.post('/lobbies/:code/start', async (c) => {
   await setLobbyState(lobby.id, 'starting');
 
   // Fetch real tracks from Deezer for the match deck
-  let tracks;
+  let tracks: CatalogTrack[];
   try {
     tracks = await catalogService.getChartTracks(50);
   } catch {
@@ -185,7 +186,7 @@ api.post('/games/:code/start', async (c) => {
   if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
 
   // Pre-seed the deck with Deezer chart tracks (have preview URLs)
-  let tracks;
+  let tracks: CatalogTrack[];
   try {
     tracks = await catalogService.getChartTracks(50);
   } catch {

@@ -249,9 +249,9 @@ export class MatchRoom extends DurableObject {
       return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'PLAYER_NOT_FOUND' };
     }
 
-    // Gather correct years from already correctly placed cards
-    const existingCorrectYears = this.state.players[playerIdx].placedCards
-      .filter((pc) => pc.isCorrect)
+    // All placed cards stay visible on the timeline, so every one of them
+    // anchors the bucket check — not just the correctly placed ones
+    const existingYears = this.state.players[playerIdx].placedCards
       .map((pc) => pc.card.year);
 
     const result = calculateFullScore(
@@ -259,7 +259,7 @@ export class MatchRoom extends DurableObject {
       card.artist,
       card.title,
       card.year,
-      existingCorrectYears
+      existingYears
     );
 
     this.state.players[playerIdx] = {

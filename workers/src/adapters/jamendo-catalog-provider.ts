@@ -151,4 +151,30 @@ export class JamendoCatalogProvider implements CatalogProvider {
     const track = await this.getTrack(trackId);
     return track?.previewUrl ?? null;
   }
+
+  /**
+   * Get the most popular tracks as chart substitute.
+   */
+  async getChartTracks(limit = 25): Promise<CatalogTrack[]> {
+    const url = `${this.baseUrl}/tracks/?client_id=${this.clientId}&format=json&limit=${Math.min(limit, 50)}&order=popularity_total&include=musicinfo&audioformat=mp32`;
+
+    try {
+      const res = await fetch(url, {
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (!res.ok) {
+        console.warn(`[JamendoCatalogProvider] chart fetch failed: ${res.status}`);
+        return [];
+      }
+
+      const body = (await res.json()) as JamendoResponse<JamendoTrack>;
+      if (!body.results || body.results.length === 0) return [];
+
+      return body.results.map(jamendoToCatalogTrack);
+    } catch (err) {
+      console.warn(`[JamendoCatalogProvider] chart error:`, err);
+      return [];
+    }
+  }
 }
