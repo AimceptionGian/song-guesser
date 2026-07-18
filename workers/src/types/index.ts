@@ -70,6 +70,17 @@ export interface MatchState {
   startedAt: number;
 }
 
+/**
+ * Transient "what the active player is typing" snapshot, broadcast so
+ * spectators can follow along. Not persisted with match state.
+ */
+export interface LiveInput {
+  playerId: string;
+  artist: string;
+  title: string;
+  year: number;
+}
+
 export type MatchPhase =
   | 'waiting_to_start'
   | 'drawing'

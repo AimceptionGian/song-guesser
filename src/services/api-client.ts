@@ -70,6 +70,69 @@ export interface CategoryAvailability {
   reason?: string;
 }
 
+/** Mirrors the backend's HistoryTrack shape (cached client-side). */
+export interface HistoryTrackDto {
+  id: string;
+  title: string;
+  artist: string;
+  album?: string;
+  playedAt: string;
+  source: string;
+  year?: number;
+  isTop?: boolean;
+}
+
+// ─── Lobby session persistence (survives OAuth redirects and reloads) ───
+
+const SESSION_KEY = 'sg-lobby-session';
+
+export interface LobbySession {
+  code: string;
+  playerId: string;
+  isHost: boolean;
+}
+
+export function saveLobbySession(session: LobbySession): void {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } catch { /* storage unavailable */ }
+}
+
+export function getLobbySession(): LobbySession | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? (JSON.parse(raw) as LobbySession) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearLobbySession(): void {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch { /* storage unavailable */ }
+}
+
+// ─── Spotify history cache (so players stay "connected" across lobbies) ───
+
+const HISTORY_CACHE_KEY = 'sg-spotify-history';
+
+export function saveHistoryCache(tracks: HistoryTrackDto[]): void {
+  try {
+    localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(tracks));
+  } catch { /* storage unavailable or quota exceeded */ }
+}
+
+export function getHistoryCache(): HistoryTrackDto[] | null {
+  try {
+    const raw = localStorage.getItem(HISTORY_CACHE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as HistoryTrackDto[]) : null;
+    return parsed?.length ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface LobbyData {
   id: string;
   code: string;
@@ -158,9 +221,26 @@ export const api = {
 
   /** Sync a player's Spotify listening history for the lobby */
   syncSpotifyHistory(req: { playerId: string; accessToken: string; lobbyCode: string }): Promise<{
-    playerId: string; tracks: number; syncedAt: number; source: string;
+    playerId: string; tracks: number; trackList: HistoryTrackDto[]; syncedAt: number; source: string;
   }> {
     return apiFetch(`/history/sync`, { method: 'POST', body: req });
+  },
+
+  /** Re-import a cached history into a (new) lobby without OAuth */
+  importCachedHistory(req: { playerId: string; lobbyCode: string; tracks: HistoryTrackDto[] }): Promise<{
+    success: boolean; tracks: number;
+  }> {
+    return apiFetch(`/history/import-cached`, { method: 'POST', body: req });
+  },
+
+  /** Update lobby settings (host only, currently totalRounds) */
+  updateSettings(code: string, settings: { totalRounds: number }): Promise<{ success: boolean; totalRounds: number }> {
+    return apiFetch(`/lobbies/${code}/settings`, { method: 'POST', body: settings });
+  },
+
+  /** Broadcast what the active player is typing */
+  sendLiveInput(code: string, input: { playerId: string; artist: string; title: string; year: number }): Promise<{ accepted: boolean }> {
+    return apiFetch(`/games/${code}/live-input`, { method: 'POST', body: input });
   },
 
   /** Health check */
@@ -175,9 +255,9 @@ export const api = {
     return apiFetch(`/games/${code}/start`, { method: 'POST', body: {} });
   },
 
-  /** Draw the next card */
-  drawCard(code: string): Promise<{ accepted: boolean; newVersion: number; stateDelta: Record<string, unknown>; state: import('../types').GameState | null }> {
-    return apiFetch(`/games/${code}/draw`, { method: 'POST', body: {} });
+  /** Draw the next card (playerId enforces turn order server-side) */
+  drawCard(code: string, playerId?: string): Promise<{ accepted: boolean; newVersion: number; stateDelta: Record<string, unknown>; state: import('../types').GameState | null }> {
+    return apiFetch(`/games/${code}/draw`, { method: 'POST', body: playerId ? { playerId } : {} });
   },
 
   /** Submit a guess */

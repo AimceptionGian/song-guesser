@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import type { MatchState, MatchPlayer, Card, CommandEnvelope, ResponseEnvelope, CommandType } from '../types';
+import type { MatchState, MatchPlayer, Card, CommandEnvelope, ResponseEnvelope, CommandType, LiveInput } from '../types';
 import { MOCK_TRACKS, shuffleArray } from '../db/mock-data';
 import { calculateFullScore } from '../services/scoring-service';
 import type { GuessSubmission } from '../types';
@@ -22,6 +22,8 @@ export class MatchRoom extends DurableObject {
   private version = 0;
   private seededDeck: Card[] | null = null;
   private storage: DurableObjectState['storage'];
+  // Transient: what the active player is currently typing (not persisted)
+  private liveInput: LiveInput | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -75,23 +77,44 @@ export class MatchRoom extends DurableObject {
       // Return both the response envelope AND the full current state
       return Response.json({
         ...response,
-        state: this.state,
+        state: this.state ? { ...this.state, liveInput: this.liveInput } : this.state,
       });
+    }
+
+    // Active player pushes what they're typing; spectators poll it via /state
+    if (request.url.endsWith('/live-input') && request.method === 'POST') {
+      const input = (await request.json()) as LiveInput;
+      if (!this.isCurrentPlayer(input.playerId)) {
+        return Response.json({ accepted: false, errorCode: 'NOT_YOUR_TURN' }, { status: 403 });
+      }
+      this.liveInput = input;
+      return Response.json({ accepted: true });
     }
 
     // HTTP state query
     if (request.url.endsWith('/state') && request.method === 'GET') {
       if (this.state) {
-        return Response.json(this.state);
+        return Response.json({ ...this.state, liveInput: this.liveInput });
       }
       return Response.json({ error: 'No active match' }, { status: 404 });
     }
 
     // HTTP fallback for state queries (legacy)
     if (this.state) {
-      return Response.json(this.state);
+      return Response.json({ ...this.state, liveInput: this.liveInput });
     }
     return Response.json({ error: 'No active match' }, { status: 404 });
+  }
+
+  /**
+   * Turn check: only the player whose turn it is may draw, guess, or
+   * broadcast live input. Solo/legacy clients that don't send a player id
+   * ('local-player') are exempt so the single-device flow keeps working.
+   */
+  private isCurrentPlayer(playerId: unknown): boolean {
+    if (!this.state) return false;
+    if (!playerId || playerId === 'local-player') return true;
+    return this.state.turnOrder[this.state.currentPlayerIndex] === playerId;
   }
 
   private async handleWebSocket(playerId: string, ws: WebSocket): Promise<void> {
@@ -219,6 +242,20 @@ export class MatchRoom extends DurableObject {
       return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NO_MATCH' };
     }
 
+    if (!this.isCurrentPlayer(command.payload.playerId)) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NOT_YOUR_TURN' };
+    }
+
+    // Idempotent while a card is already active: a second draw (double-click,
+    // re-render) must not burn another card from the deck.
+    if (this.state.phase === 'guessing' && this.state.currentCard) {
+      return {
+        accepted: true,
+        newVersion: this.version,
+        stateDelta: { phase: 'guessing', currentCard: this.state.currentCard },
+      };
+    }
+
     const card = this.state.deck.pop();
     if (!card) {
       return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'DECK_EMPTY' };
@@ -227,6 +264,7 @@ export class MatchRoom extends DurableObject {
     this.state.currentCard = card;
     this.state.phase = 'guessing';
     this.state.version = ++this.version;
+    this.liveInput = null;
     this.persistState();
 
     return {
@@ -243,6 +281,10 @@ export class MatchRoom extends DurableObject {
 
     const submission = command.payload as unknown as GuessSubmission;
     const card = this.state.currentCard;
+
+    if (!this.isCurrentPlayer(submission.playerId)) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NOT_YOUR_TURN' };
+    }
 
     const playerIdx = this.state.players.findIndex((p) => p.id === submission.playerId);
     if (playerIdx === -1) {
@@ -285,6 +327,7 @@ export class MatchRoom extends DurableObject {
     this.state.phase = isGameOver ? 'finished' : 'drawing';
     this.state.currentCard = null;
     this.state.version = ++this.version;
+    this.liveInput = null;
     this.persistState();
 
     return {

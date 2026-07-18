@@ -88,6 +88,14 @@ export async function setLobbyCategory(lobbyId: string, category: string): Promi
   }
 }
 
+export async function updateLobbySettings(lobbyId: string, partial: Partial<LobbySettings>): Promise<Lobby | undefined> {
+  const lobby = await repo.findById(lobbyId);
+  if (!lobby) return undefined;
+  lobby.settings = { ...lobby.settings, ...partial };
+  await repo.save(lobby);
+  return lobby;
+}
+
 export async function deleteLobby(lobbyId: string): Promise<void> {
   await repo.deleteById(lobbyId);
 }

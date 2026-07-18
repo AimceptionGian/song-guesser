@@ -8,6 +8,7 @@ import {
   removePlayerFromLobby,
   setLobbyState,
   setLobbyCategory,
+  updateLobbySettings,
   deleteLobby,
 } from '../services/lobby-service';
 import {
@@ -86,6 +87,26 @@ api.get('/lobbies/:code', async (c) => {
 });
 
 /**
+ * Host updates lobby settings before the match starts.
+ * Currently only totalRounds (cards per player) is adjustable.
+ */
+api.post('/lobbies/:code/settings', async (c) => {
+  const code = c.req.param('code');
+  const { totalRounds } = await c.req.json<{ totalRounds?: number }>();
+  const lobby = await getLobbyByCode(code);
+
+  if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
+
+  const rounds = Number(totalRounds);
+  if (!Number.isInteger(rounds) || rounds < 3 || rounds > 10) {
+    return c.json({ error: 'totalRounds must be an integer between 3 and 10' }, 400);
+  }
+
+  await updateLobbySettings(lobby.id, { totalRounds: rounds });
+  return c.json({ success: true, totalRounds: rounds });
+});
+
+/**
  * Host selects the game category for the lobby.
  */
 api.post('/lobbies/:code/category', async (c) => {
@@ -154,15 +175,20 @@ function shuffle<T>(arr: T[]): T[] {
 /**
  * Chart-based deck (category "random_hits"): tracks from the catalog chain
  * (itunes→deezer→mock) with release years corrected via Spotify.
+ * Fetches more chart entries than needed and samples randomly so decks
+ * vary between games. Sampling happens BEFORE year enrichment — each
+ * enriched track costs a Spotify subrequest, and that budget is capped.
  */
 async function buildChartDeck(env: Env) {
   let tracks: CatalogTrack[];
   try {
-    tracks = await catalogService.getChartTracks(DECK_SIZE);
+    tracks = await catalogService.getChartTracks(50);
   } catch {
     tracks = [];
   }
   if (tracks.length === 0) return undefined;
+
+  tracks = shuffle(tracks).slice(0, DECK_SIZE);
 
   try {
     tracks = await enrichTrackYears(tracks, env);
@@ -368,10 +394,25 @@ api.post('/games/:code/draw', async (c) => {
   const lobby = await getLobbyByCode(code);
   if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
 
+  const body = await c.req.json<{ playerId?: string }>().catch(() => ({} as { playerId?: string }));
   const res = await sendToDO(c.env, lobby.id, 'command', {
     type: 'draw_card',
-    payload: { playerId: 'local-player', lobbyId: lobby.id },
+    payload: { playerId: body.playerId || 'local-player', lobbyId: lobby.id },
   });
+  const result = await res.json();
+  return c.json(result);
+});
+
+/**
+ * Active player broadcasts what they're typing; spectators see it via /state.
+ */
+api.post('/games/:code/live-input', async (c) => {
+  const code = c.req.param('code');
+  const lobby = await getLobbyByCode(code);
+  if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
+
+  const body = await c.req.json();
+  const res = await sendToDO(c.env, lobby.id, 'live-input', body);
   const result = await res.json();
   return c.json(result);
 });
@@ -456,9 +497,32 @@ api.post('/history/sync', async (c) => {
   return c.json({
     playerId: history.playerId,
     tracks: history.tracks.length,
+    // Full track list so the client can cache it and re-import it into
+    // future lobbies without a fresh OAuth round trip.
+    trackList: history.tracks,
     syncedAt: history.syncedAt,
     source: history.source,
   });
+});
+
+/**
+ * Import a previously synced (client-cached) history into a lobby.
+ * Lets players skip the OAuth round trip when they join a new lobby.
+ */
+api.post('/history/import-cached', async (c) => {
+  const { playerId, lobbyCode, tracks } = await c.req.json<{
+    playerId: string; lobbyCode: string; tracks: HistoryTrack[];
+  }>();
+
+  if (!playerId || !lobbyCode || !tracks?.length) {
+    return c.json({ error: 'playerId, lobbyCode and tracks[] are required' }, 400);
+  }
+
+  const lobby = await getLobbyByCode(lobbyCode);
+  if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
+
+  await new DurableObjectHistoryStore(c.env).saveHistory(lobby.id, playerId, tracks);
+  return c.json({ success: true, tracks: tracks.length });
 });
 
 /**

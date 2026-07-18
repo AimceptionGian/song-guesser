@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import Timeline from '../components/Timeline';
 import type { PlacedCardInfo } from '../components/Timeline';
 import AudioPlayer from '../components/AudioPlayer';
 import Scoreboard from '../components/Scoreboard';
 import { MIN_YEAR, MAX_YEAR } from '../constants';
-import { api } from '../services/api-client';
-import type { Song, Player } from '../types';
+import { api, getLobbySession, clearLobbySession } from '../services/api-client';
+import type { Song, Player, LiveInput } from '../types';
 
 export default function GameScreen() {
   const { gameCode } = useParams();
@@ -25,8 +25,16 @@ export default function GameScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [totalRounds, setTotalRounds] = useState(5);
   const [error, setError] = useState<string | null>(null);
+  const [liveInput, setLiveInput] = useState<LiveInput | null>(null);
 
   const currentPlayer = players[currentPlayerIndex] || players[0];
+
+  // Own identity from the lobby session; only valid for this game's code.
+  // Without a session (direct URL / solo flow) everything stays enabled.
+  const session = useMemo(() => getLobbySession(), []);
+  const selfId = session && session.code === gameCode ? session.playerId : null;
+  const isMyTurn = !selfId || players.length === 0 || players[currentPlayerIndex]?.id === selfId;
+  const activePlayerName = players[currentPlayerIndex]?.name ?? '…';
 
   // ─── Sync placedYears from current player's placedCards ───
   useEffect(() => {
@@ -83,8 +91,15 @@ export default function GameScreen() {
   }, [gameCode, navigate, location.state]);
 
   // ─── Sync state from backend after each command ───
+  const syncedVersionRef = useRef(0);
   const syncState = useCallback((state: any | null | undefined) => {
     if (!state) return;
+    // A poll response can arrive after a newer command response — never
+    // let an older state overwrite a newer one (e.g. clear a drawn card).
+    if (typeof state.version === 'number') {
+      if (state.version < syncedVersionRef.current) return;
+      syncedVersionRef.current = state.version;
+    }
     if (state.players) {
       // Convert backend format (placedCards has {card}) to frontend format (placedCards has {song})
       const converted = (state.players as any[]).map((p: any) => ({
@@ -114,6 +129,48 @@ export default function GameScreen() {
     }
   }, []);
 
+  // ─── Poll game state so spectators follow the active player live ───
+  useEffect(() => {
+    if (!gameCode) return;
+    const id = setInterval(async () => {
+      try {
+        const state = await api.getGameState(gameCode);
+        if ((state as unknown as { players?: unknown }).players) {
+          syncState(state);
+          setGameStarted(true);
+          setLiveInput((state as unknown as { liveInput?: LiveInput | null }).liveInput ?? null);
+        }
+      } catch {
+        // Match not started yet — keep waiting
+      }
+    }, 1500);
+    return () => clearInterval(id);
+  }, [gameCode, syncState]);
+
+  // ─── Broadcast own inputs while it's our turn (debounced) ───
+  useEffect(() => {
+    if (!selfId || !isMyTurn || !currentCard || !gameCode) return;
+    const t = setTimeout(() => {
+      api.sendLiveInput(gameCode, {
+        playerId: selfId,
+        artist: artistInput,
+        title: titleInput,
+        year: timelineYear,
+      }).catch(() => {});
+    }, 400);
+    return () => clearTimeout(t);
+  }, [artistInput, titleInput, timelineYear, selfId, isMyTurn, currentCard, gameCode]);
+
+  // ─── Leave game ───
+  const handleLeaveGame = useCallback(() => {
+    const ok = window.confirm(
+      'Spiel wirklich verlassen? Du kannst diesem Spiel danach nicht wieder beitreten.'
+    );
+    if (!ok) return;
+    clearLobbySession();
+    navigate('/');
+  }, [navigate]);
+
   // ─── Draw card ───
   const handleDrawCard = useCallback(async () => {
     if (round > totalRounds || isLoading || !gameCode) return;
@@ -129,12 +186,12 @@ export default function GameScreen() {
         setGameStarted(true);
 
         // Now draw the first card
-        const drawRes = await api.drawCard(gameCode);
+        const drawRes = await api.drawCard(gameCode, selfId ?? undefined);
         if (drawRes.state) syncState(drawRes.state);
         setIsLoading(false);
       } else {
         // Match is running — just draw
-        const drawRes = await api.drawCard(gameCode);
+        const drawRes = await api.drawCard(gameCode, selfId ?? undefined);
         if (drawRes.state) syncState(drawRes.state);
         setIsLoading(false);
       }
@@ -143,7 +200,7 @@ export default function GameScreen() {
       setIsLoading(false);
       setError('Karte ziehen fehlgeschlagen. Versuche es erneut.');
     }
-  }, [round, totalRounds, isLoading, gameCode, gameStarted, syncState]);
+  }, [round, totalRounds, isLoading, gameCode, gameStarted, syncState, selfId]);
 
   // ─── Submit guess ───
   const handleSubmit = useCallback(async () => {
@@ -188,7 +245,7 @@ export default function GameScreen() {
     };
     try {
       await api.submitGuess(gameCode, {
-        playerId: currentPlayer?.id || 'local-player',
+        playerId: selfId ?? currentPlayer?.id ?? 'local-player',
         cardId: currentCard.id,
         guessedArtist: artistInput,
         guessedTitle: titleInput,
@@ -217,7 +274,7 @@ export default function GameScreen() {
         gameCode,
       },
     });
-  }, [currentCard, artistInput, titleInput, timelineYear, players, currentPlayerIndex, round, totalRounds, gameCode, currentPlayer, navigate]);
+  }, [currentCard, artistInput, titleInput, timelineYear, players, currentPlayerIndex, round, totalRounds, gameCode, currentPlayer, navigate, selfId]);
 
   const isLastPlayer = currentPlayerIndex === players.length - 1;
 
@@ -251,7 +308,33 @@ export default function GameScreen() {
         <Pill color="gold">
           {currentPlayer?.avatar} {currentPlayer?.name} ist am Zug
         </Pill>
+        <button
+          onClick={handleLeaveGame}
+          title="Spiel verlassen"
+          style={{
+            padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(255,77,109,0.3)',
+            background: 'rgba(255,77,109,0.08)', color: '#ff4d6d', cursor: 'pointer',
+            fontFamily: "'JetBrains Mono', monospace", fontSize: '0.78rem', fontWeight: 600,
+          }}
+        >
+          ✕ Verlassen
+        </button>
       </div>
+
+      {/* Spectator banner */}
+      {!isMyTurn && (
+        <div
+          className="fade-up"
+          style={{
+            width: '100%', maxWidth: 720, marginBottom: 12,
+            padding: '10px 16px', borderRadius: 12, textAlign: 'center',
+            background: 'rgba(255,214,10,0.08)', border: '1px solid rgba(255,214,10,0.25)',
+            color: '#ffd60a', fontSize: '0.85rem', fontWeight: 600,
+          }}
+        >
+          👀 {activePlayerName} ist am Zug — du schaust zu und kannst mithören
+        </div>
+      )}
 
       <div style={{ width: '100%', maxWidth: 720, display: 'grid', gap: 14 }}>
         {/* Current Song Card */}
@@ -315,15 +398,17 @@ export default function GameScreen() {
           </div>
         )}
 
-        {/* Timeline */}
-        <Timeline
-          minYear={MIN_YEAR}
-          maxYear={MAX_YEAR}
-          value={timelineYear}
-          onChange={setTimelineYear}
-          placedCards={placedYears}
-          currentDotYear={selectedCard ? timelineYear : undefined}
-        />
+        {/* Timeline — spectators see the active player's live position */}
+        <div style={isMyTurn ? undefined : { pointerEvents: 'none', opacity: 0.85 }}>
+          <Timeline
+            minYear={MIN_YEAR}
+            maxYear={MAX_YEAR}
+            value={isMyTurn ? timelineYear : (liveInput?.year || timelineYear)}
+            onChange={setTimelineYear}
+            placedCards={placedYears}
+            currentDotYear={selectedCard ? (isMyTurn ? timelineYear : (liveInput?.year || timelineYear)) : undefined}
+          />
+        </div>
 
         {/* Inputs + Audio */}
         <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gap: 10 }}>
@@ -336,18 +421,22 @@ export default function GameScreen() {
                 <input
                   className="text-input"
                   type="text"
-                  placeholder="z.B. Queen, Beyoncé…"
-                  value={artistInput}
+                  placeholder={isMyTurn ? 'z.B. Queen, Beyoncé…' : `${activePlayerName} tippt…`}
+                  value={isMyTurn ? artistInput : (liveInput?.artist ?? '')}
                   onChange={(e) => setArtistInput(e.target.value)}
+                  readOnly={!isMyTurn}
+                  style={isMyTurn ? undefined : { opacity: 0.7, cursor: 'default' }}
                 />
               </InputGroup>
               <InputGroup label="🎶 Songtitel">
                 <input
                   className="text-input"
                   type="text"
-                  placeholder="z.B. Bohemian Rhapsody…"
-                  value={titleInput}
+                  placeholder={isMyTurn ? 'z.B. Bohemian Rhapsody…' : `${activePlayerName} tippt…`}
+                  value={isMyTurn ? titleInput : (liveInput?.title ?? '')}
                   onChange={(e) => setTitleInput(e.target.value)}
+                  readOnly={!isMyTurn}
+                  style={isMyTurn ? undefined : { opacity: 0.7, cursor: 'default' }}
                 />
               </InputGroup>
             </div>
@@ -358,52 +447,62 @@ export default function GameScreen() {
               artistName={undefined}
             />
 
-            <button
-              onClick={handleSubmit}
-              disabled={isLoading}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 10,
-                width: '100%',
-                padding: '18px 24px',
-                borderRadius: 16,
-                border: 'none',
-                cursor: isLoading ? 'default' : 'pointer',
-                background: 'linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #f72585 100%)',
-                color: 'white',
-                fontWeight: 700,
-                fontSize: '1.05rem',
-                letterSpacing: '0.02em',
-                boxShadow: isLoading ? 'none' : '0 0 40px rgba(168,85,247,0.4)',
-                opacity: isLoading ? 0.6 : 1,
-                transition: 'transform 0.15s, box-shadow 0.15s, opacity 0.2s',
-              }}
-              onMouseEnter={(e) => {
-                if (isLoading) return;
-                e.currentTarget.style.transform = 'scale(1.03)';
-                e.currentTarget.style.boxShadow = '0 0 55px rgba(168,85,247,0.55)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'scale(1)';
-                e.currentTarget.style.boxShadow = '0 0 40px rgba(168,85,247,0.4)';
-              }}
-            >
-              {isLoading ? (
-                <>
-                  <span className="spinner" />
-                  Wird geladen…
-                </>
-              ) : (
-                'Antwort bestätigen ✓'
-              )}
-            </button>
+            {isMyTurn ? (
+              <button
+                onClick={handleSubmit}
+                disabled={isLoading}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 10,
+                  width: '100%',
+                  padding: '18px 24px',
+                  borderRadius: 16,
+                  border: 'none',
+                  cursor: isLoading ? 'default' : 'pointer',
+                  background: 'linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #f72585 100%)',
+                  color: 'white',
+                  fontWeight: 700,
+                  fontSize: '1.05rem',
+                  letterSpacing: '0.02em',
+                  boxShadow: isLoading ? 'none' : '0 0 40px rgba(168,85,247,0.4)',
+                  opacity: isLoading ? 0.6 : 1,
+                  transition: 'transform 0.15s, box-shadow 0.15s, opacity 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  if (isLoading) return;
+                  e.currentTarget.style.transform = 'scale(1.03)';
+                  e.currentTarget.style.boxShadow = '0 0 55px rgba(168,85,247,0.55)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'scale(1)';
+                  e.currentTarget.style.boxShadow = '0 0 40px rgba(168,85,247,0.4)';
+                }}
+              >
+                {isLoading ? (
+                  <>
+                    <span className="spinner" />
+                    Wird geladen…
+                  </>
+                ) : (
+                  'Antwort bestätigen ✓'
+                )}
+              </button>
+            ) : (
+              <div style={{
+                textAlign: 'center', padding: '14px', borderRadius: 12,
+                background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.15)',
+                color: '#8b7fb8', fontSize: '0.85rem',
+              }}>
+                ⏳ {activePlayerName} rät gerade…
+              </div>
+            )}
           </div>
         )}
 
         {/* Draw card button (only when no card is active) */}
-        {!currentCard && (
+        {!currentCard && (isMyTurn ? (
           <button
             onClick={handleDrawCard}
             disabled={isLoading}
@@ -445,7 +544,15 @@ export default function GameScreen() {
               'Karte ziehen 🃏'
             )}
           </button>
-        )}
+        ) : (
+          <div style={{
+            textAlign: 'center', padding: '16px', borderRadius: 16,
+            background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.15)',
+            color: '#8b7fb8', fontSize: '0.9rem',
+          }}>
+            🃏 Warte darauf, dass {activePlayerName} eine Karte zieht…
+          </div>
+        ))}
         </div>
 
         {/* Error banner */}

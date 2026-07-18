@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../services/api-client';
+import {
+  api,
+  saveLobbySession,
+  clearLobbySession,
+  saveHistoryCache,
+  getHistoryCache,
+} from '../services/api-client';
 import type { CategoryInfo, CategoryAvailability } from '../services/api-client';
 import {
   beginSpotifyAuth,
@@ -84,6 +90,47 @@ export default function LobbyScreen() {
     api.getConfig().then((r) => setSpotifyClientId(r.spotifyClientId)).catch(() => {});
   }, [phase]);
 
+  // Persist the lobby session (survives reloads and the OAuth redirect)
+  useEffect(() => {
+    if (phase === 'lobby' && lobbyCode && playerId) {
+      saveLobbySession({ code: lobbyCode, playerId, isHost });
+    }
+  }, [phase, lobbyCode, playerId, isHost]);
+
+  // Auto-import a cached Spotify history into this lobby: once connected,
+  // players shouldn't have to redo the OAuth dance for every new lobby.
+  const historyImportedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (phase !== 'lobby' || !lobbyCode || !playerId) return;
+    if (historyStatus !== 'idle') return;
+    if (playersWithHistory.includes(playerId)) return;
+    if (historyImportedRef.current === lobbyCode) return;
+
+    const cached = getHistoryCache();
+    if (!cached) return;
+
+    historyImportedRef.current = lobbyCode;
+    setHistoryStatus('syncing');
+    api.importCachedHistory({ playerId, lobbyCode, tracks: cached })
+      .then(() => {
+        setHistoryStatus('done');
+        setPlayersWithHistory((prev) => [...new Set([...prev, playerId])]);
+      })
+      .catch(() => setHistoryStatus('idle'));
+  }, [phase, lobbyCode, playerId, historyStatus, playersWithHistory]);
+
+  // ?join=CODE deep link: preselect join mode with the code filled in
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const joinCode = params.get('join');
+    if (joinCode && /^[A-Z0-9]{4,5}$/i.test(joinCode)) {
+      setMode('join');
+      setGameCode(joinCode.toUpperCase());
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ─── Spotify OAuth callback: restore the lobby session and sync history ───
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -123,6 +170,8 @@ export default function LobbyScreen() {
           accessToken,
           lobbyCode: pending.lobbyCode,
         });
+        // Cache locally so future lobbies can import without re-auth
+        if (result.trackList?.length) saveHistoryCache(result.trackList);
         setHistoryStatus('done');
         setPlayersWithHistory((prev) => [...new Set([...prev, pending.playerId])]);
         console.log(`[Spotify] ${result.tracks} Songs synchronisiert`);
@@ -256,9 +305,49 @@ export default function LobbyScreen() {
     if (playerId && lobbyCode) {
       api.leaveLobby(lobbyCode, playerId).catch(() => {});
     }
+    clearLobbySession();
+    historyImportedRef.current = null;
+    setHistoryStatus('idle');
     setPhase('form');
     setLobbyCode('');
     setLobbyPlayers([]);
+  };
+
+  const inviteLink = `${window.location.origin}/?join=${lobbyCode}`;
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  const handleShareLink = async () => {
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: 'Beat Timeline',
+          text: `Spiel mit bei Beat Timeline! Game-Code: ${lobbyCode}`,
+          url: inviteLink,
+        });
+        return;
+      }
+    } catch {
+      // user cancelled the share sheet — fall through to clipboard
+    }
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      setError('Link konnte nicht kopiert werden.');
+    }
+  };
+
+  const handleChangeRounds = async (delta: number) => {
+    if (!isHost || !lobbySettings) return;
+    const next = Math.max(3, Math.min(10, lobbySettings.totalRounds + delta));
+    if (next === lobbySettings.totalRounds) return;
+    setLobbySettings({ ...lobbySettings, totalRounds: next }); // optimistic
+    try {
+      await api.updateSettings(lobbyCode, { totalRounds: next });
+    } catch {
+      setError('Einstellung konnte nicht gespeichert werden.');
+    }
   };
 
   const displayInfo = mode === 'join' && lobbyInfo && phase === 'form'
@@ -320,6 +409,16 @@ export default function LobbyScreen() {
           <div style={{ color: '#6a5f8a', fontSize: '0.75rem', marginTop: 8 }}>
             Teile diesen Code mit anderen Spielern
           </div>
+          <button
+            onClick={handleShareLink}
+            style={{
+              marginTop: 12, padding: '8px 16px', borderRadius: 10, border: '1px solid rgba(168,85,247,0.35)',
+              background: 'rgba(168,85,247,0.1)', color: '#c4b8ff', cursor: 'pointer',
+              fontSize: '0.8rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            {linkCopied ? '✓ Link kopiert!' : '🔗 Einladungslink teilen'}
+          </button>
         </div>
 
         {/* Players in Lobby */}
@@ -444,14 +543,43 @@ export default function LobbyScreen() {
           )}
         </div>
 
-        {/* Info Grid */}
+        {/* Settings: cards per player (host adjustable) */}
         <div className="fade-up" style={{
-          display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12,
+          display: 'grid', gridTemplateColumns: '1fr', gap: 12,
           width: '100%', maxWidth: 400, animationDelay: '0.18s',
         }}>
-          <InfoBox icon="🃏" value={String(displayInfo.totalRounds)} label="Karten pro Spieler" />
-          <InfoBox icon="⭐" value={`${displayInfo.maxPoints}`} label="Max. Punkte" />
-          <InfoBox icon="📅" value={`${displayInfo.yearRange} J.`} label="Zeitraum" />
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '14px 16px', borderRadius: 12,
+            background: 'rgba(168,85,247,0.07)', border: '1px solid rgba(168,85,247,0.15)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 20 }}>🃏</span>
+              <span style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>Karten pro Spieler</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {isHost && (
+                <button
+                  onClick={() => handleChangeRounds(-1)}
+                  disabled={(lobbySettings?.totalRounds ?? 5) <= 3}
+                  style={stepperButtonStyle((lobbySettings?.totalRounds ?? 5) <= 3)}
+                >−</button>
+              )}
+              <span style={{
+                fontFamily: "'Bebas Neue', sans-serif", fontSize: '1.5rem',
+                color: '#a855f7', minWidth: 28, textAlign: 'center', lineHeight: 1,
+              }}>
+                {displayInfo.totalRounds}
+              </span>
+              {isHost && (
+                <button
+                  onClick={() => handleChangeRounds(1)}
+                  disabled={(lobbySettings?.totalRounds ?? 5) >= 10}
+                  style={stepperButtonStyle((lobbySettings?.totalRounds ?? 5) >= 10)}
+                >+</button>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Actions */}
@@ -593,20 +721,6 @@ export default function LobbyScreen() {
 
 // ─── Helpers ───
 
-function InfoBox({ icon, value, label }: { icon: string; value: string; label: string }) {
-  return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
-      padding: '16px 8px', borderRadius: 12,
-      background: 'rgba(168,85,247,0.07)', border: '1px solid rgba(168,85,247,0.15)',
-    }}>
-      <div style={{ fontSize: 20, marginBottom: 4 }}>{icon}</div>
-      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: '1.4rem', color: '#a855f7', lineHeight: 1 }}>{value}</div>
-      <div style={{ color: '#8b7fb8', fontSize: '0.7rem', marginTop: 2 }}>{label}</div>
-    </div>
-  );
-}
-
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
@@ -623,6 +737,14 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
     </button>
   );
 }
+
+const stepperButtonStyle = (disabled: boolean): React.CSSProperties => ({
+  width: 30, height: 30, borderRadius: 8, border: '1px solid rgba(168,85,247,0.35)',
+  background: disabled ? 'transparent' : 'rgba(168,85,247,0.15)',
+  color: disabled ? '#6a5f8a' : '#a855f7',
+  fontSize: '1.1rem', fontWeight: 700, cursor: disabled ? 'default' : 'pointer',
+  display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
+});
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '12px 16px', borderRadius: 12,

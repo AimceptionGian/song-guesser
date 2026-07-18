@@ -284,6 +284,30 @@ describe('MatchRoom Durable Object', () => {
       expect(data.state.currentCard).toBeTruthy();
     });
 
+    it('rejects a draw from a player who is not on turn', async () => {
+      await cmd(room, 'start_match', startPayload([
+        { id: 'p1', name: 'A', avatar: '' },
+        { id: 'p2', name: 'B', avatar: '' },
+      ]));
+      const data = await cmd(room, 'draw_card', { playerId: 'p2' });
+      expect(data.accepted).toBe(false);
+      expect(data.errorCode).toBe('NOT_YOUR_TURN');
+    });
+
+    it('allows the current player to draw and repeats the same card on double draw', async () => {
+      await cmd(room, 'start_match', startPayload([
+        { id: 'p1', name: 'A', avatar: '' },
+        { id: 'p2', name: 'B', avatar: '' },
+      ]));
+      const first = await cmd(room, 'draw_card', { playerId: 'p1' });
+      expect(first.accepted).toBe(true);
+      const second = await cmd(room, 'draw_card', { playerId: 'p1' });
+      expect(second.accepted).toBe(true);
+      // Same card, no extra card burned from the deck
+      expect(second.state.currentCard.id).toBe(first.state.currentCard.id);
+      expect(second.state.deck).toHaveLength(first.state.deck.length);
+    });
+
     it('DECK_EMPTY when deck exhausted', async () => {
       await cmd(room, 'start_match', startPayload([{ id: 'p1', name: 'A', avatar: '' }]));
       for (let i = 0; i < MOCK_TRACKS.length; i++) {
@@ -318,12 +342,14 @@ describe('MatchRoom Durable Object', () => {
       expect(data.errorCode).toBe('NO_ACTIVE_CARD');
     });
 
-    it('PLAYER_NOT_FOUND for unknown player', async () => {
+    it('rejects a guess from a player who is not on turn', async () => {
+      // An unknown player is by definition not the current player,
+      // so the turn check fires before the roster lookup.
       const data = await cmd(room, 'submit_guess', {
         playerId: 'unknown', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
       });
       expect(data.accepted).toBe(false);
-      expect(data.errorCode).toBe('PLAYER_NOT_FOUND');
+      expect(data.errorCode).toBe('NOT_YOUR_TURN');
     });
 
     it('updates score/hand/placedCards', async () => {

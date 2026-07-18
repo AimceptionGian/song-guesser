@@ -34,6 +34,15 @@ export interface GameState {
   totalRounds: number;
   phase: GamePhase;
   timelineRange: { min: number; max: number };
+  /** What the active player is currently typing (spectator view). */
+  liveInput?: LiveInput | null;
+}
+
+export interface LiveInput {
+  playerId: string;
+  artist: string;
+  title: string;
+  year: number;
 }
 
 export interface RoundResult {
