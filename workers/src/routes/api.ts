@@ -404,6 +404,37 @@ api.post('/games/:code/draw', async (c) => {
 });
 
 /**
+ * The guesser confirms the round reveal; the turn advances only now.
+ */
+api.post('/games/:code/resolve', async (c) => {
+  const code = c.req.param('code');
+  const lobby = await getLobbyByCode(code);
+  if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
+
+  const body = await c.req.json<{ playerId?: string }>().catch(() => ({} as { playerId?: string }));
+  const res = await sendToDO(c.env, lobby.id, 'command', {
+    type: 'resolve_turn',
+    payload: { playerId: body.playerId || 'local-player' },
+  });
+  const result = await res.json();
+  return c.json(result);
+});
+
+/**
+ * Active player controls audio playback; spectators follow via /state.
+ */
+api.post('/games/:code/playback', async (c) => {
+  const code = c.req.param('code');
+  const lobby = await getLobbyByCode(code);
+  if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
+
+  const body = await c.req.json();
+  const res = await sendToDO(c.env, lobby.id, 'playback', body);
+  const result = await res.json();
+  return c.json(result);
+});
+
+/**
  * Active player broadcasts what they're typing; spectators see it via /state.
  */
 api.post('/games/:code/live-input', async (c) => {

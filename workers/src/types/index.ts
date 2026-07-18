@@ -68,6 +68,31 @@ export interface MatchState {
   deck: Card[];
   turnOrder: string[];
   startedAt: number;
+  /** Set while phase is 'round_result': the reveal everyone should see. */
+  lastResult?: RoundReveal | null;
+}
+
+/** Result of a guess, revealed to all players until the guesser continues. */
+export interface RoundReveal {
+  playerId: string;
+  playerName: string;
+  card: Card;
+  guessedArtist: string;
+  guessedTitle: string;
+  guessedYear: number;
+  artistCorrect: boolean;
+  titleCorrect: boolean;
+  yearExact: boolean;
+  timelineCorrect: boolean;
+  yearDiff: number;
+  points: number;
+}
+
+/** Transient playback state, controlled by the active player. */
+export interface PlaybackState {
+  playing: boolean;
+  positionSec: number;
+  updatedAt: number; // server epoch ms when this snapshot was taken
 }
 
 /**

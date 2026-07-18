@@ -1,4 +1,4 @@
-import { calculateFullScore } from '../scoring-service';
+import { calculateFullScore, isCloseMatch, isArtistMatch } from '../scoring-service';
 import type { GuessSubmission } from '../../types';
 
 const CORRECT_ARTIST = 'The Beatles';
@@ -250,6 +250,52 @@ describe('calculateFullScore — 4×1 point system', () => {
       expect(result.timelineCorrect).toBe(true);
       expect(result.breakdown.timelinePoints).toBe(1);
       expect(result.points).toBe(3);
+    });
+  });
+
+  describe('fuzzy matching', () => {
+    it('accepts small typos', () => {
+      expect(isCloseMatch('Quen', 'Queen')).toBe(true);
+      expect(isCloseMatch('Bohemian Rapsody', 'Bohemian Rhapsody')).toBe(true);
+      expect(isCloseMatch('Smells like teen spirit', 'Smells Like Teen Spirit')).toBe(true);
+    });
+
+    it('ignores diacritics, punctuation and & vs and', () => {
+      expect(isCloseMatch('beyonce', 'Beyoncé')).toBe(true);
+      expect(isCloseMatch('Guns and Roses', "Guns N' Roses")).toBe(true);
+    });
+
+    it('ignores parentheticals and feat credits in the target', () => {
+      expect(isCloseMatch('Get Lucky', 'Get Lucky (Radio Edit - feat. Pharrell Williams)')).toBe(true);
+      expect(isCloseMatch('Should I Stay or Should I Go', 'Should I Stay or Should I Go (Remastered)')).toBe(true);
+    });
+
+    it('accepts a substantial substring', () => {
+      expect(isCloseMatch('Blinding', 'Blinding Lights')).toBe(true);
+    });
+
+    it('rejects clearly wrong answers', () => {
+      expect(isCloseMatch('Nirvana', 'Queen')).toBe(false);
+      expect(isCloseMatch('abc', 'Bohemian Rhapsody')).toBe(false);
+      expect(isCloseMatch('', 'Queen')).toBe(false);
+    });
+
+    it('matches any single artist of a multi-artist credit', () => {
+      expect(isArtistMatch('Justin Bieber', 'The Kid LAROI, Justin Bieber')).toBe(true);
+      expect(isArtistMatch('kid laroi', 'The Kid LAROI, Justin Bieber')).toBe(true);
+      expect(isArtistMatch('Drake', 'The Kid LAROI, Justin Bieber')).toBe(false);
+    });
+
+    it('flows through calculateFullScore', () => {
+      const result = calculateFullScore(
+        makeSubmission({ guessedArtist: 'the beatls', guessedTitle: 'hey jude' }),
+        CORRECT_ARTIST,
+        CORRECT_TITLE,
+        CORRECT_YEAR,
+        []
+      );
+      expect(result.artistCorrect).toBe(true);
+      expect(result.titleCorrect).toBe(true);
     });
   });
 

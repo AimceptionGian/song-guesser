@@ -4,6 +4,12 @@ interface AudioPlayerProps {
   previewUrl?: string;
   songTitle?: string;
   artistName?: string;
+  /** False for spectators: transport is remote-controlled, volume stays local. */
+  isController?: boolean;
+  /** Remote playback state to follow (spectators only). */
+  remotePlayback?: { playing: boolean; positionSec: number; updatedAt: number } | null;
+  /** Called when the controlling player plays/pauses/seeks. */
+  onTransport?: (playing: boolean, positionSec: number) => void;
 }
 
 /**
@@ -74,7 +80,14 @@ function loadStoredVolume(): number {
   }
 }
 
-export default function AudioPlayer({ previewUrl, songTitle, artistName }: AudioPlayerProps) {
+export default function AudioPlayer({
+  previewUrl,
+  songTitle,
+  artistName,
+  isController = true,
+  remotePlayback = null,
+  onTransport,
+}: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -83,6 +96,8 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
   const [hasError, setHasError] = useState(false);
   const [volume, setVolume] = useState(loadStoredVolume);
   const lastVolumeRef = useRef(volume > 0 ? volume : 0.8);
+  // Spectator: browser blocked autoplay — needs one tap to unlock audio
+  const [needsGesture, setNeedsGesture] = useState(false);
 
   // Use previewUrl if available, otherwise use generated fallback tone
   const effectiveUrl = previewUrl || getFallbackUrl();
@@ -154,16 +169,53 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
     const audio = audioRef.current;
     if (!audio) return;
 
+    // Spectators can't control the transport — a tap only unlocks audio
+    // when the browser blocked autoplay.
+    if (!isController) {
+      if (needsGesture && remotePlayback?.playing) {
+        audio.play()
+          .then(() => { setIsPlaying(true); setNeedsGesture(false); })
+          .catch(() => {});
+      }
+      return;
+    }
+
     if (isPlaying) {
       audio.pause();
       setIsPlaying(false);
+      onTransport?.(false, audio.currentTime);
     } else {
       setHasError(false);
       audio.play()
-        .then(() => setIsPlaying(true))
+        .then(() => {
+          setIsPlaying(true);
+          onTransport?.(true, audio.currentTime);
+        })
         .catch(() => setHasError(true));
     }
-  }, [isPlaying]);
+  }, [isPlaying, isController, needsGesture, remotePlayback, onTransport]);
+
+  // ─── Spectator: follow the remote playback state ───
+  useEffect(() => {
+    if (isController || !remotePlayback) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (remotePlayback.playing) {
+      // Where the active player's playhead should be right now
+      const target = remotePlayback.positionSec + (Date.now() - remotePlayback.updatedAt) / 1000;
+      if (isFinite(target) && Math.abs(audio.currentTime - target) > 2.5) {
+        audio.currentTime = Math.max(0, target);
+      }
+      audio.play()
+        .then(() => { setIsPlaying(true); setNeedsGesture(false); })
+        .catch(() => setNeedsGesture(true));
+    } else {
+      audio.pause();
+      setIsPlaying(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isController, remotePlayback?.playing, remotePlayback?.positionSec, remotePlayback?.updatedAt, effectiveUrl]);
 
   const formatTime = (seconds: number): string => {
     const m = Math.floor(seconds / 60);
@@ -190,19 +242,22 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
     >
       <button
         onClick={togglePlay}
-        disabled={noAudio}
+        disabled={noAudio || (!isController && !needsGesture)}
         style={{
           width: 40,
           height: 40,
           borderRadius: '50%',
           border: 'none',
-          cursor: noAudio ? 'default' : 'pointer',
+          cursor: noAudio || (!isController && !needsGesture) ? 'default' : 'pointer',
           background: isPlaying
             ? 'linear-gradient(135deg, #a855f7, #f72585)'
             : 'linear-gradient(135deg, #7c3aed, #a855f7)',
-          boxShadow: isPlaying
-            ? '0 0 24px rgba(247,37,133,0.5)'
-            : '0 0 16px rgba(168,85,247,0.4)',
+          boxShadow: needsGesture
+            ? '0 0 24px rgba(255,214,10,0.7)'
+            : isPlaying
+              ? '0 0 24px rgba(247,37,133,0.5)'
+              : '0 0 16px rgba(168,85,247,0.4)',
+          opacity: !isController && !needsGesture && !isPlaying ? 0.55 : 1,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -210,7 +265,7 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
           flexShrink: 0,
         }}
         onMouseEnter={(e) => {
-          if (!noAudio) {
+          if (!noAudio && (isController || needsGesture)) {
             e.currentTarget.style.transform = 'scale(1.08)';
           }
         }}
@@ -220,9 +275,13 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
         title={
           noAudio
             ? 'Keine Vorschau verfügbar'
-            : isPlaying
-              ? 'Pause'
-              : 'Vorschau abspielen'
+            : !isController
+              ? needsGesture
+                ? 'Tippen zum Mithören'
+                : 'Der Spieler am Zug steuert die Wiedergabe'
+              : isPlaying
+                ? 'Pause'
+                : 'Vorschau abspielen'
         }
       >
         {noAudio ? (
@@ -248,13 +307,15 @@ export default function AudioPlayer({ previewUrl, songTitle, artistName }: Audio
           borderRadius: 3,
           background: 'rgba(168,85,247,0.15)',
           overflow: 'hidden',
-          cursor: noAudio ? 'default' : 'pointer',
+          cursor: noAudio || !isController ? 'default' : 'pointer',
         }}
         onClick={(e) => {
-          if (!audioRef.current) return;
+          if (!audioRef.current || !isController) return;
           const rect = e.currentTarget.getBoundingClientRect();
           const pct = (e.clientX - rect.left) / rect.width;
-          audioRef.current.currentTime = pct * (audioRef.current.duration || 30);
+          const newPos = pct * (audioRef.current.duration || 30);
+          audioRef.current.currentTime = newPos;
+          onTransport?.(isPlaying, newPos);
         }}
       >
         <span

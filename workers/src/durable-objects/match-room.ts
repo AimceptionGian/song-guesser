@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import type { MatchState, MatchPlayer, Card, CommandEnvelope, ResponseEnvelope, CommandType, LiveInput } from '../types';
+import type { MatchState, MatchPlayer, Card, CommandEnvelope, ResponseEnvelope, CommandType, LiveInput, PlaybackState } from '../types';
 import { MOCK_TRACKS, shuffleArray } from '../db/mock-data';
 import { calculateFullScore } from '../services/scoring-service';
 import type { GuessSubmission } from '../types';
@@ -24,6 +24,8 @@ export class MatchRoom extends DurableObject {
   private storage: DurableObjectState['storage'];
   // Transient: what the active player is currently typing (not persisted)
   private liveInput: LiveInput | null = null;
+  // Transient: the active player's audio playback state (not persisted)
+  private playback: PlaybackState | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -77,7 +79,7 @@ export class MatchRoom extends DurableObject {
       // Return both the response envelope AND the full current state
       return Response.json({
         ...response,
-        state: this.state ? { ...this.state, liveInput: this.liveInput } : this.state,
+        state: this.state ? this.stateWithTransients() : this.state,
       });
     }
 
@@ -91,19 +93,37 @@ export class MatchRoom extends DurableObject {
       return Response.json({ accepted: true });
     }
 
+    // Active player controls audio playback; spectators follow via /state
+    if (request.url.endsWith('/playback') && request.method === 'POST') {
+      const body = (await request.json()) as { playerId: string; playing: boolean; positionSec: number };
+      if (!this.isCurrentPlayer(body.playerId)) {
+        return Response.json({ accepted: false, errorCode: 'NOT_YOUR_TURN' }, { status: 403 });
+      }
+      this.playback = {
+        playing: !!body.playing,
+        positionSec: Number(body.positionSec) || 0,
+        updatedAt: Date.now(),
+      };
+      return Response.json({ accepted: true });
+    }
+
     // HTTP state query
     if (request.url.endsWith('/state') && request.method === 'GET') {
       if (this.state) {
-        return Response.json({ ...this.state, liveInput: this.liveInput });
+        return Response.json(this.stateWithTransients());
       }
       return Response.json({ error: 'No active match' }, { status: 404 });
     }
 
     // HTTP fallback for state queries (legacy)
     if (this.state) {
-      return Response.json({ ...this.state, liveInput: this.liveInput });
+      return Response.json(this.stateWithTransients());
     }
     return Response.json({ error: 'No active match' }, { status: 404 });
+  }
+
+  private stateWithTransients() {
+    return { ...this.state, liveInput: this.liveInput, playback: this.playback };
   }
 
   /**
@@ -175,6 +195,8 @@ export class MatchRoom extends DurableObject {
         return this.drawCard(command);
       case 'submit_guess':
         return this.submitGuess(command);
+      case 'resolve_turn':
+        return this.resolveTurn(command);
       case 'end_match':
         return this.endMatch(command);
       default:
@@ -246,6 +268,11 @@ export class MatchRoom extends DurableObject {
       return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NOT_YOUR_TURN' };
     }
 
+    // The pending reveal must be resolved before the next card
+    if (this.state.phase === 'round_result') {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'RESOLVE_FIRST' };
+    }
+
     // Idempotent while a card is already active: a second draw (double-click,
     // re-render) must not burn another card from the deck.
     if (this.state.phase === 'guessing' && this.state.currentCard) {
@@ -265,6 +292,7 @@ export class MatchRoom extends DurableObject {
     this.state.phase = 'guessing';
     this.state.version = ++this.version;
     this.liveInput = null;
+    this.playback = null;
     this.persistState();
 
     return {
@@ -277,6 +305,12 @@ export class MatchRoom extends DurableObject {
   private submitGuess(command: CommandEnvelope): ResponseEnvelope {
     if (!this.state || !this.state.currentCard) {
       return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NO_ACTIVE_CARD' };
+    }
+
+    // Guard against double submits: while the reveal is showing the card is
+    // still set, but scoring it again would double-count.
+    if (this.state.phase !== 'guessing') {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'ALREADY_SUBMITTED' };
     }
 
     const submission = command.payload as unknown as GuessSubmission;
@@ -314,6 +348,55 @@ export class MatchRoom extends DurableObject {
       ],
     };
 
+    // Pause on the reveal: everyone sees the result until the guesser
+    // explicitly continues (resolve_turn). Turn/round do NOT advance here.
+    this.state.phase = 'round_result';
+    this.state.lastResult = {
+      playerId: submission.playerId,
+      playerName: this.state.players[playerIdx].name,
+      card,
+      guessedArtist: submission.guessedArtist,
+      guessedTitle: submission.guessedTitle,
+      guessedYear: submission.guessedYear,
+      artistCorrect: result.artistCorrect,
+      titleCorrect: result.titleCorrect,
+      yearExact: result.yearExact,
+      timelineCorrect: result.timelineCorrect,
+      yearDiff: result.yearDiff,
+      points: result.points,
+    };
+    this.state.version = ++this.version;
+    this.liveInput = null;
+    this.playback = null;
+    this.persistState();
+
+    return {
+      accepted: true,
+      newVersion: this.version,
+      stateDelta: {
+        phase: this.state.phase,
+        players: this.state.players,
+        lastResult: this.state.lastResult,
+      },
+    };
+  }
+
+  /**
+   * The guesser confirms the reveal; only now does the turn advance.
+   */
+  private resolveTurn(command: CommandEnvelope): ResponseEnvelope {
+    if (!this.state) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NO_MATCH' };
+    }
+    if (this.state.phase !== 'round_result' || !this.state.lastResult) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NOTHING_TO_RESOLVE' };
+    }
+
+    const pid = command.payload.playerId;
+    if (pid && pid !== 'local-player' && pid !== this.state.lastResult.playerId) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NOT_YOUR_TURN' };
+    }
+
     // Advance to next player or round
     const isLastPlayer = this.state.currentPlayerIndex >= this.state.players.length - 1;
     if (isLastPlayer) {
@@ -326,8 +409,10 @@ export class MatchRoom extends DurableObject {
     const isGameOver = this.state.currentRound > this.state.totalRounds;
     this.state.phase = isGameOver ? 'finished' : 'drawing';
     this.state.currentCard = null;
+    this.state.lastResult = null;
     this.state.version = ++this.version;
     this.liveInput = null;
+    this.playback = null;
     this.persistState();
 
     return {
@@ -335,7 +420,6 @@ export class MatchRoom extends DurableObject {
       newVersion: this.version,
       stateDelta: {
         phase: this.state.phase,
-        players: this.state.players,
         currentPlayerIndex: this.state.currentPlayerIndex,
         currentRound: this.state.currentRound,
         currentCard: null,

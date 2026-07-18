@@ -36,6 +36,10 @@ export interface GameState {
   timelineRange: { min: number; max: number };
   /** What the active player is currently typing (spectator view). */
   liveInput?: LiveInput | null;
+  /** Audio playback state controlled by the active player. */
+  playback?: PlaybackState | null;
+  /** Set while phase is 'round_result': the reveal everyone should see. */
+  lastResult?: RoundReveal | null;
 }
 
 export interface LiveInput {
@@ -43,6 +47,27 @@ export interface LiveInput {
   artist: string;
   title: string;
   year: number;
+}
+
+export interface PlaybackState {
+  playing: boolean;
+  positionSec: number;
+  updatedAt: number;
+}
+
+export interface RoundReveal {
+  playerId: string;
+  playerName: string;
+  card: Song;
+  guessedArtist: string;
+  guessedTitle: string;
+  guessedYear: number;
+  artistCorrect: boolean;
+  titleCorrect: boolean;
+  yearExact: boolean;
+  timelineCorrect: boolean;
+  yearDiff: number;
+  points: number;
 }
 
 export interface RoundResult {

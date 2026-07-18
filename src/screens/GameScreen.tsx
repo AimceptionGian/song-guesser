@@ -6,7 +6,19 @@ import AudioPlayer from '../components/AudioPlayer';
 import Scoreboard from '../components/Scoreboard';
 import { MIN_YEAR, MAX_YEAR } from '../constants';
 import { api, getLobbySession, clearLobbySession } from '../services/api-client';
-import type { Song, Player, LiveInput } from '../types';
+import type { Song, Player, LiveInput, PlaybackState, RoundReveal } from '../types';
+
+/** Backend players carry {card}; the frontend expects {song}. */
+function convertPlayers(state: any): Player[] {
+  return ((state?.players ?? []) as any[]).map((p: any) => ({
+    ...p,
+    placedCards: (p.placedCards || []).map((pc: any) => ({
+      placedYear: pc.placedYear,
+      isCorrect: pc.isCorrect,
+      song: pc.song || pc.card || null,
+    })),
+  })) as Player[];
+}
 
 export default function GameScreen() {
   const { gameCode } = useParams();
@@ -26,6 +38,9 @@ export default function GameScreen() {
   const [totalRounds, setTotalRounds] = useState(5);
   const [error, setError] = useState<string | null>(null);
   const [liveInput, setLiveInput] = useState<LiveInput | null>(null);
+  const [playback, setPlayback] = useState<PlaybackState | null>(null);
+  const [phase, setPhase] = useState<string>('drawing');
+  const [roundResult, setRoundResult] = useState<RoundReveal | null>(null);
 
   const currentPlayer = players[currentPlayerIndex] || players[0];
 
@@ -101,20 +116,13 @@ export default function GameScreen() {
       syncedVersionRef.current = state.version;
     }
     if (state.players) {
-      // Convert backend format (placedCards has {card}) to frontend format (placedCards has {song})
-      const converted = (state.players as any[]).map((p: any) => ({
-        ...p,
-        placedCards: (p.placedCards || []).map((pc: any) => ({
-          placedYear: pc.placedYear,
-          isCorrect: pc.isCorrect,
-          song: pc.song || pc.card || null,
-        })),
-      }));
-      setPlayers(converted as Player[]);
+      setPlayers(convertPlayers(state));
     }
     if (typeof state.currentPlayerIndex === 'number') setCurrentPlayerIndex(state.currentPlayerIndex);
     if (typeof state.currentRound === 'number') setRound(state.currentRound);
     if (typeof state.totalRounds === 'number') setTotalRounds(state.totalRounds);
+    if (typeof state.phase === 'string') setPhase(state.phase);
+    setRoundResult((state.lastResult as RoundReveal | undefined) ?? null);
     if (state.phase === 'guessing' && state.currentCard) {
       setCurrentCard(state.currentCard as Song);
       setSelectedCard(state.currentCard as Song);
@@ -130,22 +138,37 @@ export default function GameScreen() {
   }, []);
 
   // ─── Poll game state so spectators follow the active player live ───
+  const finishedNavRef = useRef(false);
   useEffect(() => {
     if (!gameCode) return;
     const id = setInterval(async () => {
       try {
         const state = await api.getGameState(gameCode);
-        if ((state as unknown as { players?: unknown }).players) {
+        const stateAny = state as any;
+        if (stateAny.players) {
           syncState(state);
           setGameStarted(true);
-          setLiveInput((state as unknown as { liveInput?: LiveInput | null }).liveInput ?? null);
+          setLiveInput(stateAny.liveInput ?? null);
+          setPlayback(stateAny.playback ?? null);
+          // Spectators: follow everyone to the final screen when it's over
+          if (stateAny.phase === 'finished' && !finishedNavRef.current) {
+            finishedNavRef.current = true;
+            navigate('/final', {
+              state: {
+                players: convertPlayers(stateAny),
+                round: stateAny.currentRound,
+                totalRounds: stateAny.totalRounds,
+                gameCode,
+              },
+            });
+          }
         }
       } catch {
         // Match not started yet — keep waiting
       }
     }, 1500);
     return () => clearInterval(id);
-  }, [gameCode, syncState]);
+  }, [gameCode, syncState, navigate]);
 
   // ─── Broadcast own inputs while it's our turn (debounced) ───
   useEffect(() => {
@@ -243,31 +266,52 @@ export default function GameScreen() {
         { song: currentCard, placedYear: timelineYear, isCorrect: timelineCorrect },
       ],
     };
+    // Local computation is only the offline fallback — the server result is
+    // authoritative (it also applies fuzzy matching for typos).
+    let resultPayload = {
+      song: currentCard,
+      guessedArtist: artistInput,
+      guessedTitle: titleInput,
+      guessedYear: timelineYear,
+      artistCorrect,
+      titleCorrect,
+      yearExact,
+      timelineCorrect,
+      yearDiff,
+      points,
+      players: updatedPlayers,
+    };
     try {
-      await api.submitGuess(gameCode, {
+      const res = await api.submitGuess(gameCode, {
         playerId: selfId ?? currentPlayer?.id ?? 'local-player',
         cardId: currentCard.id,
         guessedArtist: artistInput,
         guessedTitle: titleInput,
         guessedYear: timelineYear,
       });
+      const reveal = (res.state as any)?.lastResult as RoundReveal | undefined;
+      if (reveal) {
+        resultPayload = {
+          song: reveal.card,
+          guessedArtist: reveal.guessedArtist,
+          guessedTitle: reveal.guessedTitle,
+          guessedYear: reveal.guessedYear,
+          artistCorrect: reveal.artistCorrect,
+          titleCorrect: reveal.titleCorrect,
+          yearExact: reveal.yearExact,
+          timelineCorrect: reveal.timelineCorrect,
+          yearDiff: reveal.yearDiff,
+          points: reveal.points,
+          players: convertPlayers(res.state),
+        };
+      }
     } catch {
-      // Optimistic update already applied
+      // Offline — keep the locally computed result
     }
 
     navigate('/result', {
       state: {
-        song: currentCard,
-        guessedArtist: artistInput,
-        guessedTitle: titleInput,
-        guessedYear: timelineYear,
-        artistCorrect,
-        titleCorrect,
-        yearExact,
-        timelineCorrect,
-        yearDiff,
-        points,
-        players: updatedPlayers,
+        ...resultPayload,
         round,
         totalRounds,
         currentPlayerIndex,
@@ -337,8 +381,94 @@ export default function GameScreen() {
       )}
 
       <div style={{ width: '100%', maxWidth: 720, display: 'grid', gap: 14 }}>
+        {/* Round reveal — shown to everyone until the guesser continues */}
+        {phase === 'round_result' && roundResult && (
+          <div
+            className="pop-in"
+            style={{
+              borderRadius: 16,
+              padding: 20,
+              background: 'linear-gradient(135deg, #1e1c2e 0%, #13121f 100%)',
+              border: '1px solid rgba(168,85,247,0.3)',
+              display: 'grid',
+              gap: 12,
+            }}
+          >
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ color: '#8b7fb8', fontSize: '0.8rem' }}>
+                {roundResult.playerName} hat geraten
+              </div>
+              <div
+                style={{
+                  fontFamily: "'Bebas Neue', sans-serif",
+                  fontSize: '2.2rem',
+                  lineHeight: 1.1,
+                  color: roundResult.points > 0 ? '#06d6a0' : '#ff4d6d',
+                }}
+              >
+                {roundResult.points > 0 ? `+${roundResult.points}` : '0'} Punkte
+              </div>
+            </div>
+
+            <div
+              style={{
+                padding: 12,
+                borderRadius: 12,
+                background: 'rgba(168,85,247,0.08)',
+                border: '1px solid rgba(168,85,247,0.15)',
+                textAlign: 'center',
+              }}
+            >
+              <div style={{ fontSize: 28, marginBottom: 2 }}>{roundResult.card.emoji}</div>
+              <div
+                style={{
+                  fontFamily: "'Bebas Neue', sans-serif",
+                  fontSize: '1.4rem',
+                  background: 'linear-gradient(90deg, #a855f7, #f72585)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                }}
+              >
+                {roundResult.card.artist} — {roundResult.card.title}
+              </div>
+              <div style={{ color: '#8b7fb8', fontSize: '0.8rem', marginTop: 2 }}>
+                {roundResult.card.year}
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <RevealCheck label="🎤 Interpret" ok={roundResult.artistCorrect} />
+              <RevealCheck label="🎶 Titel" ok={roundResult.titleCorrect} />
+              <RevealCheck label="📅 Jahr" ok={roundResult.yearExact} />
+              <RevealCheck label="📊 Timeline" ok={roundResult.timelineCorrect} />
+            </div>
+
+            {roundResult.playerId === selfId ? (
+              <button
+                onClick={async () => {
+                  try {
+                    const res = await api.resolveTurn(gameCode!, selfId ?? undefined);
+                    if (res.state) syncState(res.state);
+                  } catch { /* poll will catch up */ }
+                }}
+                style={{
+                  padding: '14px 24px', borderRadius: 12, border: 'none', cursor: 'pointer',
+                  background: 'linear-gradient(135deg, #7c3aed, #a855f7)', color: 'white',
+                  fontWeight: 700, fontSize: '1rem',
+                }}
+              >
+                Weiter ›
+              </button>
+            ) : (
+              <div style={{ textAlign: 'center', color: '#8b7fb8', fontSize: '0.82rem' }}>
+                ⏳ Warte, bis {roundResult.playerName} weiterklickt…
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Current Song Card */}
-        {currentCard && (
+        {currentCard && phase !== 'round_result' && (
           <div
             className="pop-in"
             style={{
@@ -412,7 +542,7 @@ export default function GameScreen() {
 
         {/* Inputs + Audio */}
         <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gap: 10 }}>
-          {currentCard && (
+          {currentCard && phase !== 'round_result' && (
           <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gap: 10 }}>
             <div
               className="grid-2"
@@ -445,6 +575,14 @@ export default function GameScreen() {
               previewUrl={currentCard.previewUrl}
               songTitle={undefined}
               artistName={undefined}
+              isController={isMyTurn}
+              remotePlayback={isMyTurn ? null : playback}
+              onTransport={
+                isMyTurn && selfId && gameCode
+                  ? (playing, positionSec) =>
+                      api.sendPlayback(gameCode, { playerId: selfId, playing, positionSec }).catch(() => {})
+                  : undefined
+              }
             />
 
             {isMyTurn ? (
@@ -502,7 +640,7 @@ export default function GameScreen() {
         )}
 
         {/* Draw card button (only when no card is active) */}
-        {!currentCard && (isMyTurn ? (
+        {!currentCard && phase !== 'round_result' && (isMyTurn ? (
           <button
             onClick={handleDrawCard}
             disabled={isLoading}
@@ -590,6 +728,25 @@ function Pill({ color, children }: { color: 'purple' | 'green' | 'gold'; childre
     >
       {children}
     </span>
+  );
+}
+
+function RevealCheck({ label, ok }: { label: string; ok: boolean }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 6,
+        padding: '6px 10px',
+        borderRadius: 8,
+        background: ok ? 'rgba(6,214,160,0.08)' : 'rgba(255,77,109,0.06)',
+      }}
+    >
+      <span style={{ color: '#8b7fb8', fontSize: '0.78rem' }}>{label}</span>
+      <span style={{ fontSize: '0.95rem' }}>{ok ? '✅' : '❌'}</span>
+    </div>
   );
 }
 

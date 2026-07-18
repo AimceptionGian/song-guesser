@@ -315,6 +315,7 @@ describe('MatchRoom Durable Object', () => {
         await cmd(room, 'submit_guess', {
           playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
         });
+        await cmd(room, 'resolve_turn', { playerId: 'p1' });
       }
       const data = await cmd(room, 'draw_card');
       expect(data.accepted).toBe(false);
@@ -363,53 +364,105 @@ describe('MatchRoom Durable Object', () => {
       expect(p.placedCards).toHaveLength(1);
     });
 
-    it('advances to next player', async () => {
+    it('pauses on round_result with lastResult instead of advancing', async () => {
       const data = await cmd(room, 'submit_guess', {
         playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
       });
-      expect(data.state.currentPlayerIndex).toBe(1);
+      expect(data.state.phase).toBe('round_result');
+      expect(data.state.currentPlayerIndex).toBe(0); // NOT advanced yet
+      expect(data.state.lastResult).toBeTruthy();
+      expect(data.state.lastResult.playerId).toBe('p1');
+      expect(data.state.lastResult.playerName).toBe('Alice');
+      expect(data.state.lastResult.card).toBeTruthy();
     });
 
-    it('advances round when last player submits', async () => {
+    it('rejects a second submit while the reveal is showing', async () => {
       await cmd(room, 'submit_guess', {
         playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
       });
-      await cmd(room, 'draw_card');
       const data = await cmd(room, 'submit_guess', {
+        playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
+      });
+      expect(data.accepted).toBe(false);
+      expect(data.errorCode).toBe('ALREADY_SUBMITTED');
+    });
+
+    it('rejects a draw while the reveal is showing', async () => {
+      await cmd(room, 'submit_guess', {
+        playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
+      });
+      const data = await cmd(room, 'draw_card', { playerId: 'p1' });
+      expect(data.accepted).toBe(false);
+      expect(data.errorCode).toBe('RESOLVE_FIRST');
+    });
+  });
+
+  // ─── resolveTurn ───────────────────────────────────────────
+
+  describe('resolveTurn', () => {
+    beforeEach(async () => {
+      await cmd(room, 'start_match', startPayload([
+        { id: 'p1', name: 'Alice', avatar: '' },
+        { id: 'p2', name: 'Bob', avatar: '' },
+      ]));
+      await cmd(room, 'draw_card');
+    });
+
+    async function submitP1() {
+      return cmd(room, 'submit_guess', {
+        playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
+      });
+    }
+
+    it('NOTHING_TO_RESOLVE outside round_result', async () => {
+      const data = await cmd(room, 'resolve_turn', { playerId: 'p1' });
+      expect(data.accepted).toBe(false);
+      expect(data.errorCode).toBe('NOTHING_TO_RESOLVE');
+    });
+
+    it('only the guesser may resolve', async () => {
+      await submitP1();
+      const denied = await cmd(room, 'resolve_turn', { playerId: 'p2' });
+      expect(denied.accepted).toBe(false);
+      expect(denied.errorCode).toBe('NOT_YOUR_TURN');
+    });
+
+    it('advances to next player and clears the reveal', async () => {
+      await submitP1();
+      const data = await cmd(room, 'resolve_turn', { playerId: 'p1' });
+      expect(data.accepted).toBe(true);
+      expect(data.state.currentPlayerIndex).toBe(1);
+      expect(data.state.phase).toBe('drawing');
+      expect(data.state.currentCard).toBeNull();
+      expect(data.state.lastResult).toBeNull();
+    });
+
+    it('advances round when the last player resolves', async () => {
+      await submitP1();
+      await cmd(room, 'resolve_turn', { playerId: 'p1' });
+      await cmd(room, 'draw_card');
+      await cmd(room, 'submit_guess', {
         playerId: 'p2', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
       });
+      const data = await cmd(room, 'resolve_turn', { playerId: 'p2' });
       expect(data.state.currentRound).toBe(2);
       expect(data.state.currentPlayerIndex).toBe(0);
     });
 
-    it('ends match after last round last player', async () => {
-      // 3 rounds × 2 players = 6 draw+submit cycles
+    it('finishes the match after the last round is resolved', async () => {
+      // 3 rounds × 2 players = 6 draw+submit+resolve cycles
+      let last: any;
       for (let r = 0; r < 3; r++) {
         for (let p = 0; p < 2; p++) {
-          await cmd(room, 'draw_card');
-          const data = await cmd(room, 'submit_guess', {
-            playerId: p === 0 ? 'p1' : 'p2',
-            cardId: 'x',
-            guessedArtist: 'A',
-            guessedTitle: 'B',
-            guessedYear: 2000,
+          const pid = p === 0 ? 'p1' : 'p2';
+          await cmd(room, 'draw_card', { playerId: pid });
+          await cmd(room, 'submit_guess', {
+            playerId: pid, cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
           });
-          if (r === 2 && p === 1) {
-            expect(data.state.phase).toBe('finished');
-          }
+          last = await cmd(room, 'resolve_turn', { playerId: pid });
         }
       }
-    });
-
-    it('still continues if phases are correct', async () => {
-      await cmd(room, 'submit_guess', {
-        playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
-      });
-      const stateReq = new Request('http://localhost/state');
-      const stateRes = await room.fetch(stateReq);
-      const state: any = await stateRes.json();
-      expect(state.currentPlayerIndex).toBe(1);
-      expect(state.phase).toBe('drawing');
+      expect(last.state.phase).toBe('finished');
     });
   });
 

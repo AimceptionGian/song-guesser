@@ -243,6 +243,16 @@ export const api = {
     return apiFetch(`/games/${code}/live-input`, { method: 'POST', body: input });
   },
 
+  /** Guesser confirms the round reveal — the turn advances only now */
+  resolveTurn(code: string, playerId?: string): Promise<{ accepted: boolean; state: import('../types').GameState | null }> {
+    return apiFetch(`/games/${code}/resolve`, { method: 'POST', body: playerId ? { playerId } : {} });
+  },
+
+  /** Active player broadcasts play/pause/seek so spectators stay in sync */
+  sendPlayback(code: string, state: { playerId: string; playing: boolean; positionSec: number }): Promise<{ accepted: boolean }> {
+    return apiFetch(`/games/${code}/playback`, { method: 'POST', body: state });
+  },
+
   /** Health check */
   health(): Promise<{ status: string; timestamp: number }> {
     return apiFetch('/health');

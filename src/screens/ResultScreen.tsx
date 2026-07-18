@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Scoreboard from '../components/Scoreboard';
+import { api, getLobbySession } from '../services/api-client';
 import type { Song, Player } from '../types';
 
 interface ResultState {
@@ -51,8 +53,19 @@ export default function ResultScreen() {
   const isLastRound = round >= totalRounds;
   const isLastPlayer = currentPlayerIndex >= players.length - 1;
   const isGameOver = isLastRound && isLastPlayer;
+  const [resolving, setResolving] = useState(false);
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
+    if (resolving) return;
+    setResolving(true);
+    // Tell the server the reveal is done — only now does the turn advance
+    // for everyone (spectators stay on the reveal until this).
+    try {
+      const session = getLobbySession();
+      await api.resolveTurn(gameCode, session?.code === gameCode ? session.playerId : undefined);
+    } catch {
+      // e.g. already resolved — navigation below still applies
+    }
     if (isGameOver) {
       navigate('/final', { state: { players, round, totalRounds, gameCode } });
     } else {
@@ -171,13 +184,19 @@ export default function ResultScreen() {
             <span style={{ color: '#8b7fb8', fontSize: '0.82rem', width: 90 }}>📅 Jahr</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
               {guessedYear ? (
-                <>
-                  <span style={{ color: '#ff4d6d', fontSize: '0.9rem', textDecoration: 'line-through' }}>
-                    {guessedYear}
+                yearExact ? (
+                  <span style={{ color: '#06d6a0', fontSize: '0.9rem', fontWeight: 700 }}>
+                    {guessedYear} ✓
                   </span>
-                  <span style={{ color: '#8b7fb8' }}>→</span>
-                  <span style={{ color: '#a855f7', fontSize: '0.9rem' }}>{song.year}</span>
-                </>
+                ) : (
+                  <>
+                    <span style={{ color: '#ff4d6d', fontSize: '0.9rem', textDecoration: 'line-through' }}>
+                      {guessedYear}
+                    </span>
+                    <span style={{ color: '#8b7fb8' }}>→</span>
+                    <span style={{ color: '#a855f7', fontSize: '0.9rem' }}>{song.year}</span>
+                  </>
+                )
               ) : (
                 <span style={{ color: '#ff4d6d', fontSize: '0.9rem' }}>—</span>
               )}
@@ -228,8 +247,10 @@ export default function ResultScreen() {
         {/* Continue Button */}
         <button
           onClick={handleContinue}
+          disabled={resolving}
           className="fade-up"
           style={{
+            opacity: resolving ? 0.6 : 1,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
