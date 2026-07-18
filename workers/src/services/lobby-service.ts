@@ -80,6 +80,14 @@ export async function setLobbyState(lobbyId: string, state: Lobby['state']): Pro
   }
 }
 
+export async function setLobbyCategory(lobbyId: string, category: string): Promise<void> {
+  const lobby = await repo.findById(lobbyId);
+  if (lobby) {
+    lobby.category = category;
+    await repo.save(lobby);
+  }
+}
+
 export async function deleteLobby(lobbyId: string): Promise<void> {
   await repo.deleteById(lobbyId);
 }

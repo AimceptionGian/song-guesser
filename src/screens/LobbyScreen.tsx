@@ -1,8 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api-client';
+import type { CategoryInfo, CategoryAvailability } from '../services/api-client';
+import {
+  beginSpotifyAuth,
+  exchangeCodeForToken,
+  getPendingAuth,
+  clearPendingAuth,
+} from '../services/spotify-auth';
 
 type LobbyPhase = 'form' | 'lobby';
+type HistoryStatus = 'idle' | 'syncing' | 'done' | 'error';
+
+const DEFAULT_CATEGORY = 'random_hits';
 
 export default function LobbyScreen() {
   const navigate = useNavigate();
@@ -26,6 +36,14 @@ export default function LobbyScreen() {
   } | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Categories + Spotify history state
+  const [categories, setCategories] = useState<CategoryInfo[]>([]);
+  const [spotifyClientId, setSpotifyClientId] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string>(DEFAULT_CATEGORY);
+  const [categoryAvailability, setCategoryAvailability] = useState<Record<string, CategoryAvailability>>({});
+  const [playersWithHistory, setPlayersWithHistory] = useState<string[]>([]);
+  const [historyStatus, setHistoryStatus] = useState<HistoryStatus>('idle');
+
   // Cleanup polling on unmount
   useEffect(() => {
     return () => {
@@ -33,7 +51,7 @@ export default function LobbyScreen() {
     };
   }, []);
 
-  // Poll lobby players
+  // Poll lobby players + category state
   const startPolling = useCallback((code: string) => {
     if (pollingRef.current) clearInterval(pollingRef.current);
     pollingRef.current = setInterval(async () => {
@@ -45,6 +63,9 @@ export default function LobbyScreen() {
           maxPoints: lobby.settings.maxPoints,
           yearRange: lobby.settings.yearRange,
         });
+        setSelectedCategory(lobby.category ?? DEFAULT_CATEGORY);
+        setCategoryAvailability(lobby.categoryAvailability ?? {});
+        setPlayersWithHistory(lobby.playersWithHistory ?? []);
         // If host started the game, auto-navigate
         if (lobby.state === 'starting' || lobby.state === 'in_game') {
           if (pollingRef.current) clearInterval(pollingRef.current);
@@ -55,6 +76,88 @@ export default function LobbyScreen() {
       }
     }, 2000);
   }, [navigate]);
+
+  // Load category definitions + Spotify client ID once we're in a lobby
+  useEffect(() => {
+    if (phase !== 'lobby') return;
+    api.getCategories(true).then((r) => setCategories(r.categories)).catch(() => {});
+    api.getConfig().then((r) => setSpotifyClientId(r.spotifyClientId)).catch(() => {});
+  }, [phase]);
+
+  // ─── Spotify OAuth callback: restore the lobby session and sync history ───
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const authCode = params.get('code');
+    const authError = params.get('error');
+    if (!authCode && !authError) return;
+
+    const pending = getPendingAuth();
+    // Strip the OAuth params from the URL either way
+    window.history.replaceState({}, '', window.location.pathname);
+    if (!pending) return;
+
+    // Restore the lobby session we had before the redirect
+    setLobbyCode(pending.lobbyCode);
+    setPlayerId(pending.playerId);
+    setIsHost(pending.isHost);
+    setLobbyToken(pending.token);
+    setPhase('lobby');
+    startPolling(pending.lobbyCode);
+
+    if (authError || !authCode) {
+      clearPendingAuth();
+      setHistoryStatus('error');
+      setError('Spotify-Verbindung abgebrochen.');
+      return;
+    }
+
+    (async () => {
+      setHistoryStatus('syncing');
+      try {
+        const cfg = await api.getConfig();
+        if (!cfg.spotifyClientId) throw new Error('Spotify ist nicht konfiguriert');
+        const accessToken = await exchangeCodeForToken(cfg.spotifyClientId, authCode);
+        if (!accessToken) throw new Error('Token-Austausch fehlgeschlagen');
+        const result = await api.syncSpotifyHistory({
+          playerId: pending.playerId,
+          accessToken,
+          lobbyCode: pending.lobbyCode,
+        });
+        setHistoryStatus('done');
+        setPlayersWithHistory((prev) => [...new Set([...prev, pending.playerId])]);
+        console.log(`[Spotify] ${result.tracks} Songs synchronisiert`);
+      } catch (err) {
+        setHistoryStatus('error');
+        setError(err instanceof Error ? err.message : 'Spotify-Sync fehlgeschlagen');
+      } finally {
+        clearPendingAuth();
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleConnectSpotify = useCallback(async () => {
+    if (!spotifyClientId) {
+      setError('Spotify ist nicht konfiguriert (SPOTIFY_CLIENT_ID fehlt im Backend).');
+      return;
+    }
+    await beginSpotifyAuth(spotifyClientId, {
+      lobbyCode,
+      playerId,
+      isHost,
+      token: lobbyToken,
+    });
+  }, [spotifyClientId, lobbyCode, playerId, isHost, lobbyToken]);
+
+  const handleSelectCategory = useCallback(async (name: string) => {
+    if (!isHost) return;
+    setSelectedCategory(name); // optimistic
+    try {
+      await api.setCategory(lobbyCode, name);
+    } catch {
+      setError('Kategorie konnte nicht gesetzt werden.');
+    }
+  }, [isHost, lobbyCode]);
 
   // For "join" mode: poll lobby info when code is entered
   const [lobbyInfo, setLobbyInfo] = useState<{
@@ -100,7 +203,7 @@ export default function LobbyScreen() {
       });
       setLobbyCode(result.code);
       setLobbyToken(result.token);
-      setPlayerId('host');
+      setPlayerId(result.hostId);
       setIsHost(true);
       setPhase('lobby');
       startPolling(result.code);
@@ -234,25 +337,111 @@ export default function LobbyScreen() {
                 Warte auf Spieler…
               </div>
             ) : (
-              lobbyPlayers.map((p) => (
-                <div key={p.id} style={{
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '8px 12px', borderRadius: 10,
-                  background: p.id === playerId ? 'rgba(168,85,247,0.12)' : 'transparent',
-                }}>
-                  <span style={{ fontSize: 20 }}>{p.avatar}</span>
-                  <span style={{ color: '#f0eeff', fontWeight: 600 }}>{p.name}</span>
-                  {p.id === playerId && (
-                    <span style={{
-                      fontSize: '0.7rem', padding: '2px 8px', borderRadius: 6,
-                      background: 'rgba(168,85,247,0.2)', color: '#a855f7',
-                      marginLeft: 'auto',
-                    }}>DU</span>
-                  )}
-                </div>
-              ))
+              lobbyPlayers.map((p) => {
+                const isSelf = p.id === playerId;
+                const hasHistory = playersWithHistory.includes(p.id) || (isSelf && historyStatus === 'done');
+                return (
+                  <div key={p.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '8px 12px', borderRadius: 10,
+                    background: isSelf ? 'rgba(168,85,247,0.12)' : 'transparent',
+                  }}>
+                    <span style={{ fontSize: 20 }}>{p.avatar}</span>
+                    <span style={{ color: '#f0eeff', fontWeight: 600 }}>{p.name}</span>
+                    {isSelf && (
+                      <span style={{
+                        fontSize: '0.7rem', padding: '2px 8px', borderRadius: 6,
+                        background: 'rgba(168,85,247,0.2)', color: '#a855f7',
+                      }}>DU</span>
+                    )}
+                    <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {hasHistory ? (
+                        <span title="Spotify verbunden" style={{
+                          fontSize: '0.7rem', padding: '2px 8px', borderRadius: 6,
+                          background: 'rgba(29,185,84,0.15)', color: '#1db954', fontWeight: 600,
+                        }}>✓ Spotify</span>
+                      ) : isSelf ? (
+                        <button
+                          onClick={handleConnectSpotify}
+                          disabled={historyStatus === 'syncing'}
+                          style={{
+                            fontSize: '0.72rem', padding: '4px 10px', borderRadius: 8,
+                            border: 'none', cursor: historyStatus === 'syncing' ? 'default' : 'pointer',
+                            background: '#1db954', color: '#04160a', fontWeight: 700,
+                            opacity: historyStatus === 'syncing' ? 0.6 : 1,
+                          }}
+                        >
+                          {historyStatus === 'syncing' ? '⏳ Sync…' : '♫ Spotify verbinden'}
+                        </button>
+                      ) : (
+                        <span title="Noch nicht verbunden" style={{ fontSize: '0.7rem', color: '#6a5f8a' }}>–</span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })
             )}
           </div>
+        </div>
+
+        {/* Category Selection */}
+        <div className="fade-up" style={{ width: '100%', maxWidth: 400, animationDelay: '0.14s' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <span style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>
+              🎯 Kategorie {isHost ? 'wählen' : ''}
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {categories.map((cat) => {
+              const avail = categoryAvailability[cat.name];
+              const eligible = avail?.eligible ?? !cat.requiresHistory;
+              const selected = selectedCategory === cat.name;
+              const clickable = isHost && eligible;
+              return (
+                <button
+                  key={cat.name}
+                  onClick={() => clickable && handleSelectCategory(cat.name)}
+                  disabled={!clickable}
+                  title={!eligible ? avail?.reason : cat.description}
+                  style={{
+                    textAlign: 'left', padding: '12px 12px', borderRadius: 12,
+                    border: selected ? '1px solid rgba(6,214,160,0.6)' : '1px solid rgba(168,85,247,0.2)',
+                    background: selected ? 'rgba(6,214,160,0.08)' : '#13121f',
+                    cursor: clickable ? 'pointer' : 'default',
+                    opacity: eligible ? 1 : 0.45,
+                    transition: 'border-color 0.15s, background 0.15s',
+                  }}
+                >
+                  <div style={{ fontSize: 20, marginBottom: 4 }}>{cat.emoji}</div>
+                  <div style={{
+                    color: selected ? '#06d6a0' : '#f0eeff', fontWeight: 700, fontSize: '0.85rem',
+                    display: 'flex', alignItems: 'center', gap: 6,
+                  }}>
+                    {cat.label}
+                    {selected && <span style={{ fontSize: '0.75rem' }}>✓</span>}
+                  </div>
+                  <div style={{ color: '#8b7fb8', fontSize: '0.68rem', marginTop: 3, lineHeight: 1.4 }}>
+                    {cat.description}
+                  </div>
+                  {!eligible && avail?.reason && (
+                    <div style={{ color: '#ffd60a', fontSize: '0.65rem', marginTop: 4 }}>
+                      ⚠ {avail.reason}
+                    </div>
+                  )}
+                  {eligible && cat.requiresHistory && avail && (
+                    <div style={{ color: '#06d6a0', fontSize: '0.65rem', marginTop: 4 }}>
+                      {avail.totalSongs} Songs verfügbar
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          {!isHost && (
+            <div style={{ color: '#6a5f8a', fontSize: '0.7rem', marginTop: 6, textAlign: 'center' }}>
+              Der Host wählt die Kategorie
+            </div>
+          )}
         </div>
 
         {/* Info Grid */}

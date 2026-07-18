@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Lobby } from '../types';
+import type { HistoryTrack } from '../adapters/history-provider';
 import type { Env } from '../env';
 
 /**
@@ -58,7 +59,32 @@ export class LobbyRegistry extends DurableObject {
         const lobby = await this.storage.get<Lobby>(`lobby:${id}`);
         await this.storage.delete(`lobby:${id}`);
         if (lobby) await this.storage.delete(`code:${lobby.code}`);
+        // Cascade: drop all player histories synced for this lobby
+        const histories = await this.storage.list({ prefix: `history:${id}:` });
+        for (const key of histories.keys()) {
+          await this.storage.delete(key);
+        }
         return Response.json({ ok: true });
+      }
+      // Player listening histories, stored per lobby so the history-based
+      // game categories see the same data regardless of which isolate
+      // handled the sync request.
+      case '/saveHistory': {
+        const { lobbyId, playerId, tracks } = (await request.json()) as {
+          lobbyId: string; playerId: string; tracks: HistoryTrack[];
+        };
+        await this.storage.put(`history:${lobbyId}:${playerId}`, tracks);
+        return Response.json({ ok: true });
+      }
+      case '/getHistories': {
+        const { lobbyId } = (await request.json()) as { lobbyId: string };
+        const prefix = `history:${lobbyId}:`;
+        const entries = await this.storage.list<HistoryTrack[]>({ prefix });
+        const histories: Record<string, HistoryTrack[]> = {};
+        for (const [key, tracks] of entries) {
+          histories[key.slice(prefix.length)] = tracks;
+        }
+        return Response.json({ histories });
       }
       default:
         return new Response('Not found', { status: 404 });

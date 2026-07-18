@@ -161,6 +161,7 @@ export interface CreateLobbyResponse {
   lobbyId: string;
   code: string;
   token: string;
+  hostId: string;
 }
 
 export interface JoinLobbyRequest {

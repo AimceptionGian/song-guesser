@@ -7,9 +7,20 @@ import {
   addPlayerToLobby,
   removePlayerFromLobby,
   setLobbyState,
+  setLobbyCategory,
   deleteLobby,
 } from '../services/lobby-service';
-import { getAvailableCategories, validateCategoryEligibility } from '../services/category-service';
+import {
+  getAvailableCategories,
+  validateCategoryEligibility,
+  getCategoryDefinition,
+  getCategoryAvailability,
+  buildCategoryPool,
+  MIN_CATEGORY_POOL,
+  DEFAULT_CATEGORY,
+} from '../services/category-service';
+import { DurableObjectHistoryStore } from '../db/repositories/durable-object-repository';
+import { SpotifyHistoryProvider } from '../adapters/spotify-history-provider';
 import { catalogService } from '../services/catalog-service';
 import { createSession, extractTokenFromRequest, validateSession } from '../services/auth-service';
 import { historyService } from '../services/history-service';
@@ -27,6 +38,13 @@ api.use('*', cors());
 
 api.get('/health', (c) => c.json({ status: 'ok', timestamp: Date.now() }));
 
+// Public config for the frontend. The Spotify client ID is not a secret
+// (it's visible in every OAuth redirect URL anyway) — only the client
+// secret must stay server-side.
+api.get('/config', (c) => {
+  return c.json({ spotifyClientId: c.env.SPOTIFY_CLIENT_ID || null });
+});
+
 // ─── Lobby ───
 
 api.post('/lobbies', async (c) => {
@@ -40,6 +58,7 @@ api.post('/lobbies', async (c) => {
     lobbyId: lobby.id,
     code: lobby.code,
     token,
+    hostId,
   }, 201);
 });
 
@@ -49,7 +68,38 @@ api.get('/lobbies/:code', async (c) => {
 
   if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
 
-  return c.json(lobby);
+  // Enrich with per-player history status + category availability so the
+  // lobby UI can render the category grid and Spotify-connect states.
+  const playerIds = lobby.players.map((p) => p.id);
+  let playersWithHistory: string[] = [];
+  let categoryAvailability: ReturnType<typeof getCategoryAvailability> = {};
+  try {
+    const histories = await new DurableObjectHistoryStore(c.env).getHistories(lobby.id);
+    playersWithHistory = playerIds.filter((pid) => histories[pid]?.length);
+    categoryAvailability = getCategoryAvailability(histories, playerIds);
+  } catch (err) {
+    console.warn('[lobbies] history enrichment failed:', err);
+    categoryAvailability = getCategoryAvailability({}, playerIds);
+  }
+
+  return c.json({ ...lobby, playersWithHistory, categoryAvailability });
+});
+
+/**
+ * Host selects the game category for the lobby.
+ */
+api.post('/lobbies/:code/category', async (c) => {
+  const code = c.req.param('code');
+  const { category } = await c.req.json<{ category: string }>();
+  const lobby = await getLobbyByCode(code);
+
+  if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
+  if (!getCategoryDefinition(category)) {
+    return c.json({ error: `Unknown category: ${category}` }, 400);
+  }
+
+  await setLobbyCategory(lobby.id, category);
+  return c.json({ success: true, category });
 });
 
 api.post('/lobbies/:code/join', async (c) => {
@@ -86,11 +136,24 @@ api.post('/lobbies/:code/leave', async (c) => {
 // lookups stay well under the Worker's per-invocation subrequest cap.
 const DECK_SIZE = 30;
 
+// History decks are smaller: every track needs its own Deezer preview
+// lookup (one subrequest each), and that budget is capped per invocation.
+const HISTORY_DECK_SIZE = 20;
+
+const CARD_GRADIENT = 'linear-gradient(135deg, #1e1c2e, #13121f)';
+
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 /**
- * Build the match deck: chart tracks from the catalog chain (itunes→deezer→mock),
- * with release years corrected via Spotify (the chart providers often report
- * compilation/re-release dates). Returns undefined when no tracks are available,
- * so the DO falls back to MOCK_TRACKS.
+ * Chart-based deck (category "random_hits"): tracks from the catalog chain
+ * (itunes→deezer→mock) with release years corrected via Spotify.
  */
 async function buildChartDeck(env: Env) {
   let tracks: CatalogTrack[];
@@ -116,8 +179,84 @@ async function buildChartDeck(env: Env) {
     emoji: '🎵',
     previewUrl: t.previewUrl ?? undefined,
     coverUrl: t.coverUrl ?? undefined,
-    gradient: 'linear-gradient(135deg, #1e1c2e, #13121f)',
+    gradient: CARD_GRADIENT,
   }));
+}
+
+/**
+ * History-based deck: pool from the players' synced Spotify histories
+ * (release years come with the history data), previews looked up on Deezer.
+ * Tracks without a findable preview are dropped — a guessing game without
+ * audio is pointless. Returns undefined when the pool is too small, so the
+ * caller can fall back to the chart deck.
+ */
+async function buildHistoryDeck(env: Env, lobby: Lobby, category: string) {
+  const histories = await new DurableObjectHistoryStore(env).getHistories(lobby.id);
+  const pool = buildCategoryPool(category, histories, lobby.players.map((p) => p.id));
+
+  if (pool.length < MIN_CATEGORY_POOL) {
+    console.warn(`[buildHistoryDeck] pool too small for "${category}" (${pool.length}/${MIN_CATEGORY_POOL})`);
+    return undefined;
+  }
+
+  const deezer = catalogService.getProvider('deezer');
+  const picked = shuffle(pool).slice(0, HISTORY_DECK_SIZE);
+
+  const cards = await Promise.all(
+    picked.map(async (t) => {
+      // History artist strings can list several artists — search with the first
+      const primaryArtist = t.artist.split(',')[0].trim();
+      let previewUrl: string | undefined;
+      let coverUrl: string | undefined;
+      try {
+        const matches = await deezer.searchTracks(`${primaryArtist} ${t.title}`, 1);
+        if (matches[0]?.previewUrl) {
+          previewUrl = matches[0].previewUrl;
+          coverUrl = matches[0].coverUrl ?? undefined;
+        }
+      } catch {
+        // no preview — track gets dropped below
+      }
+      if (!previewUrl) return null;
+
+      return {
+        id: t.id,
+        title: t.title,
+        artist: t.artist,
+        year: t.year ?? 2000,
+        genre: 'Pop',
+        emoji: '🎵',
+        previewUrl,
+        coverUrl,
+        gradient: CARD_GRADIENT,
+      };
+    })
+  );
+
+  const deck = cards.filter((c): c is NonNullable<typeof c> => c !== null);
+  if (deck.length < MIN_CATEGORY_POOL) {
+    console.warn(`[buildHistoryDeck] only ${deck.length} tracks with previews for "${category}"`);
+    return undefined;
+  }
+  return deck;
+}
+
+/**
+ * Build the match deck for the lobby's selected category.
+ * History categories fall back to the chart deck when their pool is too
+ * small, so a match can always start.
+ */
+async function buildDeck(env: Env, lobby: Lobby) {
+  const category = lobby.category ?? DEFAULT_CATEGORY;
+  const def = getCategoryDefinition(category);
+
+  if (def?.requiresHistory) {
+    const deck = await buildHistoryDeck(env, lobby, category);
+    if (deck) return deck;
+    console.warn(`[buildDeck] falling back to chart deck for category "${category}"`);
+  }
+
+  return buildChartDeck(env);
 }
 
 api.post('/lobbies/:code/start', async (c) => {
@@ -128,7 +267,7 @@ api.post('/lobbies/:code/start', async (c) => {
 
   await setLobbyState(lobby.id, 'starting');
 
-  const deck = await buildChartDeck(c.env);
+  const deck = await buildDeck(c.env, lobby);
 
   // Pre-seed the Durable Object with the deck
   const doId = c.env.MATCH_ROOM.idFromName(lobby.id);
@@ -206,8 +345,8 @@ api.post('/games/:code/start', async (c) => {
   const lobby = await getLobbyByCode(code);
   if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
 
-  // Pre-seed the deck with chart tracks (preview URLs + corrected years)
-  const deck = await buildChartDeck(c.env);
+  // Pre-seed the deck for the lobby's selected category
+  const deck = await buildDeck(c.env, lobby);
 
   // Init deck
   await sendToDO(c.env, lobby.id, 'init-deck', { deck });
@@ -288,19 +427,30 @@ api.get('/ws/:lobbyCode', async (c) => {
 // ─── Player History ───
 
 /**
- * Sync player's history from Spotify.
- * Requires a valid Spotify access token.
+ * Sync a player's history from Spotify and persist it for the lobby.
+ * Requires a valid Spotify user access token (obtained via PKCE in the
+ * frontend). Persists to the LobbyRegistry DO so every isolate — and the
+ * deck build at match start — sees it.
  */
 api.post('/history/sync', async (c) => {
-  const { playerId, accessToken } = await c.req.json<{ playerId: string; accessToken: string }>();
+  const { playerId, accessToken, lobbyCode } = await c.req.json<{
+    playerId: string; accessToken: string; lobbyCode?: string;
+  }>();
 
   if (!playerId || !accessToken) {
     return c.json({ error: 'playerId and accessToken are required' }, 400);
   }
 
-  const history = await historyService.syncFromSpotify(playerId, accessToken);
+  const provider = new SpotifyHistoryProvider();
+  const history = await provider.fetchHistory(playerId, accessToken);
   if (!history) {
     return c.json({ error: 'Spotify sync failed. No tracks found or invalid token.' }, 502);
+  }
+
+  if (lobbyCode) {
+    const lobby = await getLobbyByCode(lobbyCode);
+    if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
+    await new DurableObjectHistoryStore(c.env).saveHistory(lobby.id, playerId, history.tracks);
   }
 
   return c.json({

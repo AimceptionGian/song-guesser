@@ -131,4 +131,44 @@ describe('LobbyRegistry', () => {
     const res = await registry.fetch(new Request('http://lobby-registry/unknown', { method: 'POST' }));
     expect(res.status).toBe(404);
   });
+
+  describe('player histories', () => {
+    const tracks = [
+      { id: 'spotify-1', title: 'Song', artist: 'Artist', playedAt: '2026-01-01T00:00:00Z', source: 'spotify', year: 1999 },
+    ];
+
+    it('saves and returns histories per lobby and player', async () => {
+      const { registry } = createRegistry();
+      await post(registry, '/saveHistory', { lobbyId: 'L1', playerId: 'p1', tracks });
+      await post(registry, '/saveHistory', { lobbyId: 'L1', playerId: 'p2', tracks: [] });
+      await post(registry, '/saveHistory', { lobbyId: 'OTHER', playerId: 'p9', tracks });
+
+      const res = await post(registry, '/getHistories', { lobbyId: 'L1' });
+      const { histories } = await res.json() as { histories: Record<string, unknown[]> };
+
+      expect(Object.keys(histories).sort()).toEqual(['p1', 'p2']);
+      expect(histories.p1).toHaveLength(1);
+      expect(histories.p2).toHaveLength(0);
+    });
+
+    it('returns empty histories for a lobby without syncs', async () => {
+      const { registry } = createRegistry();
+      const res = await post(registry, '/getHistories', { lobbyId: 'EMPTY' });
+      const { histories } = await res.json() as { histories: Record<string, unknown[]> };
+      expect(histories).toEqual({});
+    });
+
+    it('deletes histories when the lobby is deleted', async () => {
+      const { registry } = createRegistry();
+      const lobby = makeLobby({ id: 'L1' });
+      await post(registry, '/save', { lobby });
+      await post(registry, '/saveHistory', { lobbyId: 'L1', playerId: 'p1', tracks });
+
+      await post(registry, '/deleteById', { id: 'L1' });
+
+      const res = await post(registry, '/getHistories', { lobbyId: 'L1' });
+      const { histories } = await res.json() as { histories: Record<string, unknown[]> };
+      expect(histories).toEqual({});
+    });
+  });
 });

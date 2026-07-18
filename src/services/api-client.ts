@@ -51,6 +51,7 @@ export interface CreateLobbyResponse {
   lobbyId: string;
   code: string;
   token: string;
+  hostId: string;
 }
 
 export interface JoinLobbyRequest {
@@ -63,12 +64,19 @@ export interface JoinLobbyResponse {
   token: string;
 }
 
+export interface CategoryAvailability {
+  eligible: boolean;
+  totalSongs: number;
+  reason?: string;
+}
+
 export interface LobbyData {
   id: string;
   code: string;
   hostId: string;
   players: Array<{ id: string; name: string; avatar: string; joinedAt: number }>;
   state: string;
+  category: string | null;
   settings: {
     maxPlayers: number;
     totalRounds: number;
@@ -77,11 +85,15 @@ export interface LobbyData {
     yearRange: { min: number; max: number };
   };
   createdAt: number;
+  playersWithHistory?: string[];
+  categoryAvailability?: Record<string, CategoryAvailability>;
 }
 
 export interface CategoryInfo {
   name: string;
+  label: string;
   description: string;
+  emoji: string;
   requiresHistory: boolean;
 }
 
@@ -129,6 +141,26 @@ export const api = {
     return apiFetch<{ categories: CategoryInfo[] }>('/categories', {
       params: hasHistory ? { history: 'true' } : undefined,
     });
+  },
+
+  /** Set the lobby's game category (host only) */
+  setCategory(code: string, category: string): Promise<{ success: boolean; category: string }> {
+    return apiFetch<{ success: boolean; category: string }>(`/lobbies/${code}/category`, {
+      method: 'POST',
+      body: { category },
+    });
+  },
+
+  /** Public frontend config (Spotify client ID for the PKCE flow) */
+  getConfig(): Promise<{ spotifyClientId: string | null }> {
+    return apiFetch<{ spotifyClientId: string | null }>('/config');
+  },
+
+  /** Sync a player's Spotify listening history for the lobby */
+  syncSpotifyHistory(req: { playerId: string; accessToken: string; lobbyCode: string }): Promise<{
+    playerId: string; tracks: number; syncedAt: number; source: string;
+  }> {
+    return apiFetch(`/history/sync`, { method: 'POST', body: req });
   },
 
   /** Health check */

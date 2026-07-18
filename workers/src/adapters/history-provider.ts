@@ -9,6 +9,11 @@ export interface HistoryTrack {
   album?: string;
   playedAt: string; // ISO 8601 timestamp
   source: 'spotify' | 'upload';
+  /** Original release year from the provider's album metadata, if known. */
+  year?: number;
+  /** True when the track is one of the player's top tracks (well known),
+   *  not just something they played once. */
+  isTop?: boolean;
 }
 
 export interface PlayerHistory {
