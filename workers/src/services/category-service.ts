@@ -18,7 +18,7 @@ const AVAILABLE_CATEGORIES: CategoryDefinition[] = [
   {
     name: 'random_hits',
     label: 'Random Hits',
-    description: 'Aktuelle Chart-Hits — für alle spielbar',
+    description: 'Charts + Klassiker aus allen Jahrzehnten — für alle spielbar',
     emoji: '🎲',
     requiresHistory: false,
   },

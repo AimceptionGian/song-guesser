@@ -156,7 +156,7 @@ describe('category-service', () => {
   describe('getCategoryDescription', () => {
     it('should return description for known category', () => {
       const desc = getCategoryDescription('random_hits');
-      expect(desc).toContain('Chart-Hits');
+      expect(desc).toContain('Jahrzehnten');
     });
 
     it('should return fallback for unknown category', () => {
