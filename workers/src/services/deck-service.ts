@@ -125,6 +125,28 @@ export async function buildCuratedDecadeCards(targetCount: number): Promise<Card
   return cards;
 }
 
+function dedupeKey(card: Card): string {
+  return `${card.artist}|${card.title}`.toLowerCase().replace(/[^a-z0-9|]+/g, '');
+}
+
+/**
+ * Merge two card lists, dropping duplicate title+artist pairs. `preferred`
+ * wins on conflict — used to keep the curated (verified) year when a
+ * classic also happens to be on the current chart (e.g. after a resurgence)
+ * instead of whatever year the chart provider reports for it.
+ */
+export function mergeDeduped(preferred: Card[], other: Card[]): Card[] {
+  const seen = new Set<string>();
+  const merged: Card[] = [];
+  for (const card of [...preferred, ...other]) {
+    const key = dedupeKey(card);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(card);
+  }
+  return merged;
+}
+
 /**
  * "Random Hits" deck: a blend of current chart hits and curated classics
  * spanning every decade from the 1960s to the 2010s, so the category isn't
@@ -135,7 +157,8 @@ export async function buildRandomHitsDeck(env: Env): Promise<Card[] | undefined>
     fetchRecentChartCards(env, RECENT_CHART_COUNT),
     buildCuratedDecadeCards(CURATED_TARGET),
   ]);
-  const combined = shuffle([...recent, ...curated]);
+
+  const combined = shuffle(mergeDeduped(curated, recent));
   return combined.length > 0 ? combined : undefined;
 }
 

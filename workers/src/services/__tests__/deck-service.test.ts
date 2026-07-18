@@ -4,12 +4,21 @@ import {
   buildRandomHitsDeck,
   buildHistoryDeck,
   buildDeck,
+  mergeDeduped,
 } from '../deck-service';
 import { catalogService } from '../catalog-service';
 import { DECADES, DECADE_HITS } from '../../db/decade-hits';
 import * as historyStore from '../../db/repositories/durable-object-repository';
 import type { CatalogTrack } from '../../adapters/catalog-provider';
-import type { Lobby } from '../../types';
+import type { Card, Lobby } from '../../types';
+
+function makeCard(overrides: Partial<Card> = {}): Card {
+  return {
+    id: 'card-1', title: 'Song', artist: 'Artist', year: 2000, genre: 'Pop',
+    emoji: '🎵', gradient: 'x',
+    ...overrides,
+  };
+}
 
 function makeCatalogTrack(overrides: Partial<CatalogTrack> = {}): CatalogTrack {
   return {
@@ -111,6 +120,31 @@ describe('deck-service', () => {
       // CURATED_MAX_ATTEMPTS is 32 — every candidate misses, so we should
       // stop there instead of exhausting all ~60 curated candidates.
       expect(searchTracks.mock.calls.length).toBeLessThanOrEqual(32);
+    });
+  });
+
+  describe('mergeDeduped', () => {
+    it('keeps the preferred copy when the same song appears in both lists', () => {
+      const curated = [makeCard({ id: 'decade-1982', title: 'Billie Jean', artist: 'Michael Jackson', year: 1982 })];
+      const recent = [makeCard({ id: 'deezer-99', title: 'Billie Jean', artist: 'Michael Jackson', year: 2009 })];
+
+      const merged = mergeDeduped(curated, recent);
+      expect(merged).toHaveLength(1);
+      expect(merged[0].year).toBe(1982);
+    });
+
+    it('is case- and punctuation-insensitive when matching duplicates', () => {
+      const curated = [makeCard({ title: "Sweet Child O' Mine", artist: "Guns N' Roses", year: 1987 })];
+      const recent = [makeCard({ title: 'sweet child o mine', artist: 'guns n roses', year: 1987 })];
+
+      expect(mergeDeduped(curated, recent)).toHaveLength(1);
+    });
+
+    it('keeps unrelated songs from both lists', () => {
+      const curated = [makeCard({ title: 'A', artist: 'X' })];
+      const recent = [makeCard({ title: 'B', artist: 'Y' })];
+
+      expect(mergeDeduped(curated, recent)).toHaveLength(2);
     });
   });
 
