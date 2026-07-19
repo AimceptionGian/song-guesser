@@ -71,6 +71,7 @@ export default function GameScreen() {
         isCorrect: pc.isCorrect,
         emoji: (pc as any).song?.emoji ?? (pc as any).card?.emoji ?? '🎵',
         title: (pc as any).song?.title ?? (pc as any).card?.title ?? '',
+        coverUrl: (pc as any).song?.coverUrl ?? (pc as any).card?.coverUrl ?? undefined,
       })));
     } else {
       setPlacedYears([]);
@@ -516,7 +517,10 @@ export default function GameScreen() {
         )}
       </div>
 
-      <div style={{ width: '100%', maxWidth: 720, display: 'grid', gap: 14 }}>
+      {/* minmax(0,1fr): Grid-Kinder dürfen unter ihre Min-Content-Breite
+          schrumpfen — sonst drückt der Audio-Player die Spalte auf Mobile
+          breiter als den Viewport. */}
+      <div style={{ width: '100%', maxWidth: 720, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 14 }}>
         {/* ─── Buzzer-Phase: Zeit abgelaufen, ein Punkt ist zu klauen ─── */}
         {phase === 'buzzer' && roundResult && (
           <div
@@ -738,9 +742,9 @@ export default function GameScreen() {
         </div>
 
         {/* Eingaben + Audio */}
-        <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gap: 10 }}>
+        <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 }}>
           {currentCard && phase === 'guessing' && (
-          <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gap: 10 }}>
+          <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 }}>
             {speakMode ? (
               <div style={{
                 padding: '13px 16px', borderRadius: 14, textAlign: 'center',

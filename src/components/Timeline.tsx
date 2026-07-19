@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useMemo } from 'react';
+import { useRef, useCallback, useState, useMemo, useEffect } from 'react';
 
 export interface TimelineHandle {
   year: number;
@@ -19,19 +19,24 @@ export interface PlacedCardInfo {
   isCorrect: boolean;
   emoji?: string;
   title?: string;
+  coverUrl?: string;
 }
 
 const CARD_WIDTH = 84;
+const CARD_WIDTH_MIN = 46;
 const CARD_GAP = 10;
 
 // Layout cards: one centered row sorted by year, pixel-spaced by card width
 // so cards can never overlap (same-year cards simply sit next to each other).
-function layoutCards(cards: PlacedCardInfo[]): (PlacedCardInfo & { offsetPx: number })[] {
+function layoutCards(
+  cards: PlacedCardInfo[],
+  cardWidth: number,
+): (PlacedCardInfo & { offsetPx: number })[] {
   const sorted = [...cards].sort((a, b) => a.year - b.year);
   const n = sorted.length;
   return sorted.map((card, i) => ({
     ...card,
-    offsetPx: (i - (n - 1) / 2) * (CARD_WIDTH + CARD_GAP),
+    offsetPx: (i - (n - 1) / 2) * (cardWidth + CARD_GAP),
   }));
 }
 
@@ -45,6 +50,20 @@ export default function Timeline({
 }: TimelineProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
+
+  // Kartenreihe beobachten: auf schmalen Screens schrumpfen die Karten,
+  // damit auch 5+ platzierte Karten im Panel bleiben.
+  const cardsRowRef = useRef<HTMLDivElement>(null);
+  const [rowWidth, setRowWidth] = useState(0);
+  useEffect(() => {
+    const el = cardsRowRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const update = () => setRowWidth(el.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const decadeMarks = [];
   for (let d = Math.ceil(minYear / 10) * 10; d <= maxYear; d += 10) {
@@ -92,7 +111,17 @@ export default function Timeline({
   }, []);
 
   // Layout cards: evenly spaced, centered on timeline
-  const laidOutCards = useMemo(() => layoutCards(placedCards), [placedCards]);
+  const n = placedCards.length;
+  const cardWidth = useMemo(() => {
+    if (n === 0 || rowWidth === 0) return CARD_WIDTH;
+    const fit = Math.floor((rowWidth - (n - 1) * CARD_GAP) / n);
+    return Math.max(CARD_WIDTH_MIN, Math.min(CARD_WIDTH, fit));
+  }, [n, rowWidth]);
+  const laidOutCards = useMemo(
+    () => layoutCards(placedCards, cardWidth),
+    [placedCards, cardWidth]
+  );
+  const compact = cardWidth < 64;
   const cardsHeight = 104;
 
   return (
@@ -120,6 +149,7 @@ export default function Timeline({
 
       {/* Platzierte Karten — alle auf gleicher Höhe, gleiche Jahre nebeneinander */}
       <div
+        ref={cardsRowRef}
         style={{
           position: 'relative',
           height: cardsHeight,
@@ -128,13 +158,15 @@ export default function Timeline({
       >
         {laidOutCards.map((card, i) => {
           return (
+            // Wichtig: keine Animations-Klasse auf diesem Wrapper — die
+            // popIn-Keyframes würden das inline translateX() überschreiben
+            // und alle Karten würden übereinander in der Mitte landen.
             <div
               key={i}
-              className="pop-in"
               style={{
                 position: 'absolute',
                 left: '50%',
-                transform: `translateX(calc(-50% + ${card.offsetPx}px)) rotate(${(i % 3) - 1}deg)`,
+                transform: `translateX(calc(-50% + ${card.offsetPx}px))`,
                 top: 8,
                 display: 'flex',
                 flexDirection: 'column',
@@ -144,8 +176,9 @@ export default function Timeline({
             >
               {/* Mini-Karte im Cassetten-Look */}
               <div
+                className="pop-in"
                 style={{
-                  width: CARD_WIDTH,
+                  width: cardWidth,
                   borderRadius: 10,
                   border: `1px solid ${card.isCorrect ? 'rgba(30,215,96,0.55)' : 'var(--line-strong)'}`,
                   background: 'var(--bg-3)',
@@ -153,33 +186,49 @@ export default function Timeline({
                   boxShadow: '0 6px 16px rgba(0,0,0,0.45)',
                 }}
               >
-                <div
-                  style={{
-                    height: 36,
-                    display: 'grid',
-                    placeItems: 'center',
-                    background: card.isCorrect
-                      ? 'rgba(30,215,96,0.1)'
-                      : 'rgba(139,92,246,0.12)',
-                  }}
-                >
-                  <span style={{ fontSize: 18 }}>{card.emoji || '🎵'}</span>
-                </div>
-                <div style={{ padding: '3px 5px', textAlign: 'center' }}>
-                  <div style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '0.6rem',
-                    color: 'var(--muted)',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}>
-                    {card.title || ''}
+                {card.coverUrl ? (
+                  <img
+                    src={card.coverUrl}
+                    alt=""
+                    style={{
+                      display: 'block',
+                      width: '100%',
+                      height: compact ? 36 : 48,
+                      objectFit: 'cover',
+                      opacity: card.isCorrect ? 1 : 0.9,
+                    }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      height: compact ? 30 : 36,
+                      display: 'grid',
+                      placeItems: 'center',
+                      background: card.isCorrect
+                        ? 'rgba(30,215,96,0.1)'
+                        : 'rgba(139,92,246,0.12)',
+                    }}
+                  >
+                    <span style={{ fontSize: compact ? 15 : 18 }}>{card.emoji || '🎵'}</span>
                   </div>
+                )}
+                <div style={{ padding: '3px 5px', textAlign: 'center' }}>
+                  {!compact && (
+                    <div style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '0.6rem',
+                      color: 'var(--muted)',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}>
+                      {card.title || ''}
+                    </div>
+                  )}
                   <div style={{
                     fontFamily: 'var(--font-display)',
                     fontWeight: 700,
-                    fontSize: '0.72rem',
+                    fontSize: compact ? '0.64rem' : '0.72rem',
                     color: card.isCorrect ? 'var(--green)' : 'var(--ink)',
                   }}>
                     {card.year}

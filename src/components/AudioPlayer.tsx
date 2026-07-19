@@ -239,6 +239,7 @@ export default function AudioPlayer({
       title={songTitle && artistName ? `${artistName} – ${songTitle}` : undefined}
       style={{
         display: 'flex',
+        flexWrap: 'wrap',
         alignItems: 'center',
         gap: 12,
         padding: '10px 14px',
@@ -324,6 +325,7 @@ export default function AudioPlayer({
         aria-valuemax={100}
         style={{
           flex: 1,
+          minWidth: 90,
           height: 30,
           display: 'flex',
           alignItems: 'center',
@@ -347,7 +349,7 @@ export default function AudioPlayer({
               style={{
                 flex: 1,
                 height: `${h * 100}%`,
-                minWidth: 2,
+                minWidth: 1,
                 borderRadius: 2,
                 background: filled
                   ? (isPlaying ? 'var(--lime)' : 'var(--pink)')
