@@ -24,7 +24,7 @@ import { createSession, extractTokenFromRequest, validateSession } from '../serv
 import { historyService } from '../services/history-service';
 import { buildDeck } from '../services/deck-service';
 import type { HistoryTrack } from '../adapters/history-provider';
-import type { CreateLobbyRequest, JoinLobbyRequest } from '../types';
+import type { CreateLobbyRequest, JoinLobbyRequest, LobbySettings } from '../types';
 import type { Env } from '../env';
 
 const api = new Hono<{ Bindings: Env }>();
@@ -84,22 +84,55 @@ api.get('/lobbies/:code', async (c) => {
 
 /**
  * Host updates lobby settings before the match starts.
- * Currently only totalRounds (cards per player) is adjustable.
+ * Adjustable: totalRounds, guessMode, answerTimeSec, buzzerEnabled.
  */
 api.post('/lobbies/:code/settings', async (c) => {
   const code = c.req.param('code');
-  const { totalRounds } = await c.req.json<{ totalRounds?: number }>();
+  const body = await c.req.json<{
+    totalRounds?: number;
+    guessMode?: string;
+    answerTimeSec?: number;
+    buzzerEnabled?: boolean;
+  }>();
   const lobby = await getLobbyByCode(code);
 
   if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
 
-  const rounds = Number(totalRounds);
-  if (!Number.isInteger(rounds) || rounds < 3 || rounds > 10) {
-    return c.json({ error: 'totalRounds must be an integer between 3 and 10' }, 400);
+  const patch: Partial<LobbySettings> = {};
+
+  if (body.totalRounds !== undefined) {
+    const rounds = Number(body.totalRounds);
+    if (!Number.isInteger(rounds) || rounds < 3 || rounds > 10) {
+      return c.json({ error: 'totalRounds must be an integer between 3 and 10' }, 400);
+    }
+    patch.totalRounds = rounds;
   }
 
-  await updateLobbySettings(lobby.id, { totalRounds: rounds });
-  return c.json({ success: true, totalRounds: rounds });
+  if (body.guessMode !== undefined) {
+    if (body.guessMode !== 'type' && body.guessMode !== 'speak') {
+      return c.json({ error: 'guessMode must be "type" or "speak"' }, 400);
+    }
+    patch.guessMode = body.guessMode;
+  }
+
+  if (body.answerTimeSec !== undefined) {
+    const secs = Number(body.answerTimeSec);
+    if (!Number.isInteger(secs) || secs < 0 || secs > 180) {
+      return c.json({ error: 'answerTimeSec must be an integer between 0 and 180' }, 400);
+    }
+    patch.answerTimeSec = secs;
+  }
+
+  if (body.buzzerEnabled !== undefined) {
+    patch.buzzerEnabled = !!body.buzzerEnabled;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return c.json({ error: 'No settings provided' }, 400);
+  }
+
+  const updated = await updateLobbySettings(lobby.id, patch);
+  return c.json({ success: true, settings: updated?.settings });
 });
 
 /**
@@ -240,12 +273,20 @@ api.post('/games/:code/start', async (c) => {
   // Init deck
   await sendToDO(c.env, lobby.id, 'init-deck', { deck });
 
-  // Start match
+  // Start match. The buzzer only makes sense when a time limit exists and
+  // answers are typed (auto-graded) — enforced here in one place.
+  const guessMode = lobby.settings.guessMode ?? 'type';
+  const answerTimeSec = lobby.settings.answerTimeSec ?? 0;
   const res = await sendToDO(c.env, lobby.id, 'command', {
     type: 'start_match',
     payload: {
       players: lobby.players.map((p) => ({ id: p.id, name: p.name, avatar: p.avatar })),
       totalRounds: lobby.settings.totalRounds,
+      settings: {
+        guessMode,
+        answerTimeSec,
+        buzzerEnabled: !!lobby.settings.buzzerEnabled && answerTimeSec > 0 && guessMode === 'type',
+      },
     },
   });
   const result = await res.json();
@@ -320,6 +361,54 @@ api.post('/games/:code/guess', async (c) => {
   const res = await sendToDO(c.env, lobby.id, 'command', {
     type: 'submit_guess',
     payload: body,
+  });
+  const result = await res.json();
+  return c.json(result);
+});
+
+/**
+ * Buzzer: after the active player's time ran out, another player buzzes
+ * to try to steal a point. First buzz wins the answer window.
+ */
+api.post('/games/:code/buzz', async (c) => {
+  const code = c.req.param('code');
+  const lobby = await getLobbyByCode(code);
+  if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
+
+  const body = await c.req.json<{ playerId?: string }>().catch(() => ({} as { playerId?: string }));
+  const res = await sendToDO(c.env, lobby.id, 'command', {
+    type: 'buzz',
+    payload: { playerId: body.playerId },
+  });
+  const result = await res.json();
+  return c.json(result);
+});
+
+/** Buzzer winner submits one guess, matched against artist OR title. */
+api.post('/games/:code/buzzer-answer', async (c) => {
+  const code = c.req.param('code');
+  const lobby = await getLobbyByCode(code);
+  if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
+
+  const body = await c.req.json<{ playerId?: string; text?: string }>().catch(() => ({} as Record<string, never>));
+  const res = await sendToDO(c.env, lobby.id, 'command', {
+    type: 'buzzer_answer',
+    payload: { playerId: body.playerId, text: body.text ?? '' },
+  });
+  const result = await res.json();
+  return c.json(result);
+});
+
+/** Speak mode: a non-active player votes whether artist/title were said correctly. */
+api.post('/games/:code/vote', async (c) => {
+  const code = c.req.param('code');
+  const lobby = await getLobbyByCode(code);
+  if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
+
+  const body = await c.req.json<{ playerId?: string; artistOk?: boolean; titleOk?: boolean }>().catch(() => ({} as Record<string, never>));
+  const res = await sendToDO(c.env, lobby.id, 'command', {
+    type: 'vote_reveal',
+    payload: { playerId: body.playerId, artistOk: !!body.artistOk, titleOk: !!body.titleOk },
   });
   const result = await res.json();
   return c.json(result);

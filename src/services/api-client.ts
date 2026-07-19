@@ -44,6 +44,9 @@ export interface CreateLobbyRequest {
     maxPoints: number;
     timelineOnlyScoring: boolean;
     yearRange: { min: number; max: number };
+    guessMode: 'type' | 'speak';
+    answerTimeSec: number;
+    buzzerEnabled: boolean;
   }>;
 }
 
@@ -146,10 +149,47 @@ export interface LobbyData {
     maxPoints: number;
     timelineOnlyScoring: boolean;
     yearRange: { min: number; max: number };
+    guessMode?: 'type' | 'speak';
+    answerTimeSec?: number;
+    buzzerEnabled?: boolean;
   };
   createdAt: number;
   playersWithHistory?: string[];
   categoryAvailability?: Record<string, CategoryAvailability>;
+}
+
+// ─── Lobby preferences (persisted per browser, pre-fill the next lobby) ───
+
+const PREFS_KEY = 'sg-lobby-prefs';
+
+export interface LobbyPrefs {
+  totalRounds: number;
+  guessMode: 'type' | 'speak';
+  answerTimeSec: number;
+  buzzerEnabled: boolean;
+}
+
+export const DEFAULT_LOBBY_PREFS: LobbyPrefs = {
+  totalRounds: 5,
+  guessMode: 'type',
+  answerTimeSec: 0,
+  buzzerEnabled: false,
+};
+
+export function saveLobbyPrefs(prefs: LobbyPrefs): void {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch { /* storage unavailable */ }
+}
+
+export function getLobbyPrefs(): LobbyPrefs {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return DEFAULT_LOBBY_PREFS;
+    return { ...DEFAULT_LOBBY_PREFS, ...(JSON.parse(raw) as Partial<LobbyPrefs>) };
+  } catch {
+    return DEFAULT_LOBBY_PREFS;
+  }
 }
 
 export interface CategoryInfo {
@@ -233,8 +273,8 @@ export const api = {
     return apiFetch(`/history/import-cached`, { method: 'POST', body: req });
   },
 
-  /** Update lobby settings (host only, currently totalRounds) */
-  updateSettings(code: string, settings: { totalRounds: number }): Promise<{ success: boolean; totalRounds: number }> {
+  /** Update lobby settings (host only) */
+  updateSettings(code: string, settings: Partial<LobbyPrefs>): Promise<{ success: boolean; settings?: LobbyData['settings'] }> {
     return apiFetch(`/lobbies/${code}/settings`, { method: 'POST', body: settings });
   },
 
@@ -251,6 +291,21 @@ export const api = {
   /** Active player broadcasts play/pause/seek so spectators stay in sync */
   sendPlayback(code: string, state: { playerId: string; playing: boolean; positionSec: number }): Promise<{ accepted: boolean }> {
     return apiFetch(`/games/${code}/playback`, { method: 'POST', body: state });
+  },
+
+  /** Buzz to steal a point after the active player's time ran out */
+  buzz(code: string, playerId: string): Promise<{ accepted: boolean; errorCode?: string; state: import('../types').GameState | null }> {
+    return apiFetch(`/games/${code}/buzz`, { method: 'POST', body: { playerId } });
+  },
+
+  /** Buzzer winner submits one guess (matched against artist OR title) */
+  buzzerAnswer(code: string, playerId: string, text: string): Promise<{ accepted: boolean; state: import('../types').GameState | null }> {
+    return apiFetch(`/games/${code}/buzzer-answer`, { method: 'POST', body: { playerId, text } });
+  },
+
+  /** Speak mode: vote whether the guesser said artist/title correctly */
+  voteReveal(code: string, vote: { playerId: string; artistOk: boolean; titleOk: boolean }): Promise<{ accepted: boolean; state: import('../types').GameState | null }> {
+    return apiFetch(`/games/${code}/vote`, { method: 'POST', body: vote });
   },
 
   /** Health check */

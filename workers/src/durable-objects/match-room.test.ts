@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MatchRoom } from './match-room';
 import type { CommandEnvelope, MatchState } from '../types';
 import { MOCK_TRACKS } from '../db/mock-data';
@@ -54,9 +54,28 @@ vi.mock('../services/scoring-service', () => ({
     artistCorrect: true,
     titleCorrect: true,
     yearDiff: 5,
-    breakdown: { artistPoints: 150, titlePoints: 150, yearPoints: 0 },
+    yearExact: false,
+    timelineCorrect: true,
+    breakdown: { artistPoints: 150, titlePoints: 150, yearPoints: 0, timelinePoints: 1 },
   })),
+  // Simple case-insensitive equality — precise fuzzy logic is tested in
+  // scoring-service's own tests.
+  isCloseMatch: vi.fn((g: string, t: string) => g.trim().toLowerCase() === t.trim().toLowerCase()),
+  isArtistMatch: vi.fn((g: string, t: string) => g.trim().toLowerCase() === t.trim().toLowerCase()),
 }));
+
+import { calculateFullScore } from '../services/scoring-service';
+
+/** calculateFullScore result where the guesser missed artist + title. */
+const MISSED_ARTIST_TITLE = {
+  points: 1,
+  artistCorrect: false,
+  titleCorrect: false,
+  yearDiff: 10,
+  yearExact: false,
+  timelineCorrect: true,
+  breakdown: { artistPoints: 0, titlePoints: 0, yearPoints: 0, timelinePoints: 1 },
+};
 
 // Minimal WebSocket mock that actually supports addEventListener
 class MockWebSocket {
@@ -491,6 +510,365 @@ describe('MatchRoom Durable Object', () => {
       expect(d1.state.version).toBe(1);
       const d2 = await cmd(room, 'draw_card');
       expect(d2.state.version).toBe(2);
+    });
+  });
+
+  // ─── answer timer ──────────────────────────────────────────
+
+  describe('answer timer', () => {
+    const twoPlayers = [
+      { id: 'p1', name: 'Alice', avatar: '' },
+      { id: 'p2', name: 'Bob', avatar: '' },
+    ];
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-19T12:00:00Z'));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** Trigger the lazy timeout check via a state poll. */
+    async function poll(r: MatchRoom): Promise<any> {
+      const res = await r.fetch(new Request('http://localhost/state'));
+      return res.json();
+    }
+
+    it('draw sets a turn deadline when answerTimeSec > 0', async () => {
+      await cmd(room, 'start_match', {
+        ...startPayload(twoPlayers),
+        settings: { guessMode: 'type', answerTimeSec: 30, buzzerEnabled: false },
+      });
+      const data = await cmd(room, 'draw_card', { playerId: 'p1' });
+      expect(data.state.turnDeadline).toBe(Date.now() + 30_000);
+    });
+
+    it('leaves turnDeadline null when the timer is off', async () => {
+      await cmd(room, 'start_match', startPayload(twoPlayers));
+      const data = await cmd(room, 'draw_card', { playerId: 'p1' });
+      expect(data.state.turnDeadline).toBeNull();
+      vi.advanceTimersByTime(10 * 60_000);
+      const state = await poll(room);
+      expect(state.phase).toBe('guessing'); // never times out
+    });
+
+    it('auto-submits the live input when time runs out', async () => {
+      await cmd(room, 'start_match', {
+        ...startPayload(twoPlayers),
+        settings: { guessMode: 'type', answerTimeSec: 30, buzzerEnabled: false },
+      });
+      await cmd(room, 'draw_card', { playerId: 'p1' });
+
+      // The active player had typed something before the deadline
+      await room.fetch(new Request('http://localhost/live-input', {
+        method: 'POST',
+        body: JSON.stringify({ playerId: 'p1', artist: 'Halb', title: 'Getippt', year: 1999 }),
+      }));
+
+      vi.advanceTimersByTime(32_000);
+      const state = await poll(room);
+      expect(state.phase).toBe('round_result');
+      expect(state.lastResult.timedOut).toBe(true);
+      expect(state.lastResult.guessedArtist).toBe('Halb');
+      expect(state.lastResult.guessedYear).toBe(1999);
+      expect(state.players[0].placedCards).toHaveLength(1);
+    });
+
+    it('does not fire before deadline + grace', async () => {
+      await cmd(room, 'start_match', {
+        ...startPayload(twoPlayers),
+        settings: { guessMode: 'type', answerTimeSec: 30, buzzerEnabled: false },
+      });
+      await cmd(room, 'draw_card', { playerId: 'p1' });
+      vi.advanceTimersByTime(30_500); // inside the 1s grace window
+      const state = await poll(room);
+      expect(state.phase).toBe('guessing');
+    });
+
+    it('a submit after the timeout is rejected as ALREADY_SUBMITTED', async () => {
+      await cmd(room, 'start_match', {
+        ...startPayload(twoPlayers),
+        settings: { guessMode: 'type', answerTimeSec: 30, buzzerEnabled: false },
+      });
+      await cmd(room, 'draw_card', { playerId: 'p1' });
+      vi.advanceTimersByTime(32_000);
+      const data = await cmd(room, 'submit_guess', {
+        playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
+      });
+      expect(data.accepted).toBe(false);
+      expect(data.errorCode).toBe('ALREADY_SUBMITTED');
+    });
+  });
+
+  // ─── buzzer ────────────────────────────────────────────────
+
+  describe('buzzer', () => {
+    const threePlayers = [
+      { id: 'p1', name: 'Alice', avatar: '' },
+      { id: 'p2', name: 'Bob', avatar: '' },
+      { id: 'p3', name: 'Cleo', avatar: '' },
+    ];
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-19T12:00:00Z'));
+      // The guesser misses artist + title so both fields are stealable
+      vi.mocked(calculateFullScore).mockReturnValue(MISSED_ARTIST_TITLE as any);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function poll(r: MatchRoom): Promise<any> {
+      const res = await r.fetch(new Request('http://localhost/state'));
+      return res.json();
+    }
+
+    /** Start with buzzer on, draw, let the clock run out → buzzer phase. */
+    async function reachBuzzerPhase(): Promise<any> {
+      await cmd(room, 'start_match', {
+        ...startPayload(threePlayers),
+        settings: { guessMode: 'type', answerTimeSec: 30, buzzerEnabled: true },
+      });
+      await cmd(room, 'draw_card', { playerId: 'p1' });
+      vi.advanceTimersByTime(32_000);
+      return poll(room);
+    }
+
+    it('opens the buzzer window after a timeout when a point is stealable', async () => {
+      const state = await reachBuzzerPhase();
+      expect(state.phase).toBe('buzzer');
+      expect(state.buzzer.winnerId).toBeNull();
+      expect(state.buzzer.openUntil).toBeGreaterThan(Date.now());
+    });
+
+    it('goes straight to the reveal when the guesser already had artist AND title', async () => {
+      vi.mocked(calculateFullScore).mockReturnValue({
+        ...MISSED_ARTIST_TITLE, artistCorrect: true, titleCorrect: true, points: 3,
+      } as any);
+      const state = await reachBuzzerPhase();
+      expect(state.phase).toBe('round_result'); // nothing to steal
+    });
+
+    it('a normal (non-timeout) submit never opens the buzzer', async () => {
+      await cmd(room, 'start_match', {
+        ...startPayload(threePlayers),
+        settings: { guessMode: 'type', answerTimeSec: 30, buzzerEnabled: true },
+      });
+      await cmd(room, 'draw_card', { playerId: 'p1' });
+      const data = await cmd(room, 'submit_guess', {
+        playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
+      });
+      expect(data.state.phase).toBe('round_result');
+    });
+
+    it('first buzz wins, the guesser cannot buzz, later buzzes are TOO_LATE', async () => {
+      await reachBuzzerPhase();
+
+      const guesser = await cmd(room, 'buzz', { playerId: 'p1' });
+      expect(guesser.accepted).toBe(false);
+      expect(guesser.errorCode).toBe('GUESSER_CANNOT_BUZZ');
+
+      const first = await cmd(room, 'buzz', { playerId: 'p2' });
+      expect(first.accepted).toBe(true);
+      expect(first.state.buzzer.winnerId).toBe('p2');
+
+      const second = await cmd(room, 'buzz', { playerId: 'p3' });
+      expect(second.accepted).toBe(false);
+      expect(second.errorCode).toBe('TOO_LATE');
+    });
+
+    it('a correct steal awards exactly 1 point to the buzzer winner', async () => {
+      const state = await reachBuzzerPhase();
+      const artist = state.lastResult.card.artist;
+
+      await cmd(room, 'buzz', { playerId: 'p2' });
+      const data = await cmd(room, 'buzzer_answer', { playerId: 'p2', text: artist });
+
+      expect(data.accepted).toBe(true);
+      expect(data.state.phase).toBe('round_result');
+      expect(data.state.lastResult.steal.field).toBe('artist');
+      expect(data.state.lastResult.steal.points).toBe(1);
+      const bob = data.state.players.find((p: any) => p.id === 'p2');
+      expect(bob.score).toBe(1);
+    });
+
+    it('a wrong steal answer awards nothing', async () => {
+      await reachBuzzerPhase();
+      await cmd(room, 'buzz', { playerId: 'p2' });
+      const data = await cmd(room, 'buzzer_answer', { playerId: 'p2', text: 'völlig falsch' });
+
+      expect(data.state.phase).toBe('round_result');
+      expect(data.state.lastResult.steal.field).toBeNull();
+      expect(data.state.lastResult.steal.points).toBe(0);
+      const bob = data.state.players.find((p: any) => p.id === 'p2');
+      expect(bob.score).toBe(0);
+    });
+
+    it('only the buzzer winner may answer', async () => {
+      await reachBuzzerPhase();
+      await cmd(room, 'buzz', { playerId: 'p2' });
+      const data = await cmd(room, 'buzzer_answer', { playerId: 'p3', text: 'x' });
+      expect(data.accepted).toBe(false);
+      expect(data.errorCode).toBe('NOT_BUZZER_WINNER');
+    });
+
+    it('closes with no steal when nobody buzzes in time', async () => {
+      await reachBuzzerPhase();
+      vi.advanceTimersByTime(12_000); // buzz window (10s) + grace
+      const state = await poll(room);
+      expect(state.phase).toBe('round_result');
+      expect(state.lastResult.steal).toBeNull();
+    });
+
+    it('closes with a 0-point steal when the winner never answers', async () => {
+      await reachBuzzerPhase();
+      await cmd(room, 'buzz', { playerId: 'p2' });
+      vi.advanceTimersByTime(17_000); // answer window (15s) + grace
+      const state = await poll(room);
+      expect(state.phase).toBe('round_result');
+      expect(state.lastResult.steal.playerId).toBe('p2');
+      expect(state.lastResult.steal.points).toBe(0);
+    });
+
+    it('a field the guesser already had cannot be stolen', async () => {
+      // Guesser got the artist — only the title is stealable
+      vi.mocked(calculateFullScore).mockReturnValue({
+        ...MISSED_ARTIST_TITLE, artistCorrect: true, points: 2,
+      } as any);
+      const state = await reachBuzzerPhase();
+      const artist = state.lastResult.card.artist;
+
+      await cmd(room, 'buzz', { playerId: 'p2' });
+      const data = await cmd(room, 'buzzer_answer', { playerId: 'p2', text: artist });
+      expect(data.state.lastResult.steal.field).toBeNull();
+      expect(data.state.lastResult.steal.points).toBe(0);
+    });
+  });
+
+  // ─── speak mode (reveal vote) ──────────────────────────────
+
+  describe('speak mode voting', () => {
+    const threePlayers = [
+      { id: 'p1', name: 'Alice', avatar: '' },
+      { id: 'p2', name: 'Bob', avatar: '' },
+      { id: 'p3', name: 'Cleo', avatar: '' },
+    ];
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-19T12:00:00Z'));
+      vi.mocked(calculateFullScore).mockReturnValue({
+        points: 300, artistCorrect: true, titleCorrect: true, yearDiff: 5,
+        yearExact: true, timelineCorrect: true,
+        breakdown: { artistPoints: 1, titlePoints: 1, yearPoints: 1, timelinePoints: 1 },
+      } as any);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function poll(r: MatchRoom): Promise<any> {
+      const res = await r.fetch(new Request('http://localhost/state'));
+      return res.json();
+    }
+
+    async function startSpeakAndSubmit(): Promise<any> {
+      await cmd(room, 'start_match', {
+        ...startPayload(threePlayers),
+        settings: { guessMode: 'speak', answerTimeSec: 0, buzzerEnabled: false },
+      });
+      await cmd(room, 'draw_card', { playerId: 'p1' });
+      return cmd(room, 'submit_guess', {
+        playerId: 'p1', cardId: 'x', guessedArtist: '', guessedTitle: '', guessedYear: 1985,
+      });
+    }
+
+    it('submit only counts year+timeline and opens the vote', async () => {
+      const data = await startSpeakAndSubmit();
+      expect(data.state.phase).toBe('reveal_vote');
+      // artist/title auto-grading is ignored in speak mode
+      expect(data.state.lastResult.artistCorrect).toBe(false);
+      expect(data.state.lastResult.titleCorrect).toBe(false);
+      expect(data.state.lastResult.points).toBe(2); // yearPoints + timelinePoints
+      expect(data.state.players[0].score).toBe(2);
+      expect(data.state.voting.voterIds.sort()).toEqual(['p2', 'p3']);
+    });
+
+    it('closes the vote once all voters voted and applies the majority', async () => {
+      await startSpeakAndSubmit();
+      const v1 = await cmd(room, 'vote_reveal', { playerId: 'p2', artistOk: true, titleOk: false });
+      expect(v1.state.phase).toBe('reveal_vote'); // still waiting for p3
+      const v2 = await cmd(room, 'vote_reveal', { playerId: 'p3', artistOk: true, titleOk: false });
+      expect(v2.state.phase).toBe('round_result');
+      expect(v2.state.lastResult.artistCorrect).toBe(true);
+      expect(v2.state.lastResult.titleCorrect).toBe(false);
+      expect(v2.state.lastResult.points).toBe(3); // 2 + artist bonus
+      expect(v2.state.players[0].score).toBe(3);
+    });
+
+    it('a tie goes to the guesser', async () => {
+      await startSpeakAndSubmit();
+      await cmd(room, 'vote_reveal', { playerId: 'p2', artistOk: true, titleOk: true });
+      const data = await cmd(room, 'vote_reveal', { playerId: 'p3', artistOk: false, titleOk: false });
+      expect(data.state.lastResult.artistCorrect).toBe(true);
+      expect(data.state.lastResult.titleCorrect).toBe(true);
+      expect(data.state.players[0].score).toBe(4);
+    });
+
+    it('the guesser cannot vote', async () => {
+      await startSpeakAndSubmit();
+      const data = await cmd(room, 'vote_reveal', { playerId: 'p1', artistOk: true, titleOk: true });
+      expect(data.accepted).toBe(false);
+      expect(data.errorCode).toBe('NOT_A_VOTER');
+    });
+
+    it('an expired vote window tallies the votes cast so far', async () => {
+      await startSpeakAndSubmit();
+      await cmd(room, 'vote_reveal', { playerId: 'p2', artistOk: true, titleOk: false });
+      vi.advanceTimersByTime(47_000); // vote window (45s) + grace
+      const state = await poll(room);
+      expect(state.phase).toBe('round_result');
+      expect(state.lastResult.artistCorrect).toBe(true);
+      expect(state.lastResult.titleCorrect).toBe(false);
+      expect(state.players[0].score).toBe(3);
+    });
+
+    it('an expired vote window with zero votes awards no bonus', async () => {
+      await startSpeakAndSubmit();
+      vi.advanceTimersByTime(47_000);
+      const state = await poll(room);
+      expect(state.phase).toBe('round_result');
+      expect(state.players[0].score).toBe(2);
+    });
+
+    it('solo play skips the vote entirely', async () => {
+      await cmd(room, 'start_match', {
+        players: [{ id: 'p1', name: 'Alice', avatar: '' }],
+        totalRounds: 3,
+        settings: { guessMode: 'speak', answerTimeSec: 0, buzzerEnabled: false },
+      });
+      await cmd(room, 'draw_card', { playerId: 'p1' });
+      const data = await cmd(room, 'submit_guess', {
+        playerId: 'p1', cardId: 'x', guessedArtist: '', guessedTitle: '', guessedYear: 1985,
+      });
+      expect(data.state.phase).toBe('round_result');
+    });
+
+    it('speak-mode timeout goes to the vote, not the buzzer', async () => {
+      await cmd(room, 'start_match', {
+        ...startPayload(threePlayers),
+        settings: { guessMode: 'speak', answerTimeSec: 30, buzzerEnabled: false },
+      });
+      await cmd(room, 'draw_card', { playerId: 'p1' });
+      vi.advanceTimersByTime(32_000);
+      const state = await poll(room);
+      expect(state.phase).toBe('reveal_vote');
+      expect(state.lastResult.timedOut).toBe(true);
     });
   });
 });

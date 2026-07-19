@@ -1,9 +1,24 @@
 import { DurableObject } from 'cloudflare:workers';
-import type { MatchState, MatchPlayer, Card, CommandEnvelope, ResponseEnvelope, CommandType, LiveInput, PlaybackState } from '../types';
+import type { MatchState, MatchPlayer, MatchSettings, Card, CommandEnvelope, ResponseEnvelope, CommandType, LiveInput, PlaybackState } from '../types';
 import { MOCK_TRACKS, shuffleArray } from '../db/mock-data';
-import { calculateFullScore } from '../services/scoring-service';
+import { calculateFullScore, isCloseMatch, isArtistMatch } from '../services/scoring-service';
 import type { GuessSubmission } from '../types';
 import type { Env } from '../env';
+
+// Timeouts are enforced lazily: every request (commands and the 1.5s state
+// polls) first runs checkTimeouts(), so an expired deadline is applied within
+// one poll interval — no DO alarms needed.
+const TIMEOUT_GRACE_MS = 1000;   // latency headroom before a deadline fires
+const BUZZ_WINDOW_MS = 10_000;   // how long players may buzz after the timeout
+const BUZZ_ANSWER_MS = 15_000;   // how long the buzzer winner may answer
+const VOTE_WINDOW_MS = 45_000;   // how long the reveal vote stays open
+const FALLBACK_GUESS_YEAR = 1992; // matches the frontend's initial slider position
+
+const DEFAULT_MATCH_SETTINGS: MatchSettings = {
+  guessMode: 'type',
+  answerTimeSec: 0,
+  buzzerEnabled: false,
+};
 
 // WebSocket client metadata
 interface WSClient {
@@ -46,6 +61,10 @@ export class MatchRoom extends DurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const playerId = url.searchParams.get('playerId') || 'unknown';
+
+    // Apply any expired deadlines before handling the request — this is what
+    // makes the answer timer/buzzer windows tick without DO alarms.
+    this.checkTimeouts();
 
     if (request.headers.get('Upgrade') === 'websocket') {
       const [client, server] = Object.values(new WebSocketPair());
@@ -123,7 +142,8 @@ export class MatchRoom extends DurableObject {
   }
 
   private stateWithTransients() {
-    return { ...this.state, liveInput: this.liveInput, playback: this.playback };
+    // serverNow lets clients render countdowns without trusting their own clock
+    return { ...this.state, liveInput: this.liveInput, playback: this.playback, serverNow: Date.now() };
   }
 
   /**
@@ -188,6 +208,9 @@ export class MatchRoom extends DurableObject {
     // Version gating disabled for single-player prototype
     // All commands accepted and processed in order
 
+    // WS messages bypass fetch(), so expired deadlines are applied here too
+    this.checkTimeouts();
+
     switch (command.commandType) {
       case 'start_match':
         return this.startMatch(command);
@@ -197,6 +220,12 @@ export class MatchRoom extends DurableObject {
         return this.submitGuess(command);
       case 'resolve_turn':
         return this.resolveTurn(command);
+      case 'buzz':
+        return this.buzz(command);
+      case 'buzzer_answer':
+        return this.buzzerAnswer(command);
+      case 'vote_reveal':
+        return this.voteReveal(command);
       case 'end_match':
         return this.endMatch(command);
       default:
@@ -221,6 +250,8 @@ export class MatchRoom extends DurableObject {
 
     const players = command.payload.players as Array<{ id: string; name: string; avatar: string }>;
     const totalRounds = command.payload.totalRounds as number || 5;
+    const rawSettings = (command.payload.settings ?? {}) as Partial<MatchSettings>;
+    const settings: MatchSettings = { ...DEFAULT_MATCH_SETTINGS, ...rawSettings };
 
     if (!players || players.length === 0) {
       return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NO_PLAYERS' };
@@ -249,6 +280,10 @@ export class MatchRoom extends DurableObject {
       deck,
       turnOrder: players.map((p) => p.id),
       startedAt: Date.now(),
+      settings,
+      turnDeadline: null,
+      buzzer: null,
+      voting: null,
     };
     this.persistState();
 
@@ -290,6 +325,9 @@ export class MatchRoom extends DurableObject {
 
     this.state.currentCard = card;
     this.state.phase = 'guessing';
+    // Answer timer starts the moment the card is drawn
+    const answerTimeSec = this.state.settings?.answerTimeSec ?? 0;
+    this.state.turnDeadline = answerTimeSec > 0 ? Date.now() + answerTimeSec * 1000 : null;
     this.state.version = ++this.version;
     this.liveInput = null;
     this.playback = null;
@@ -314,16 +352,44 @@ export class MatchRoom extends DurableObject {
     }
 
     const submission = command.payload as unknown as GuessSubmission;
-    const card = this.state.currentCard;
 
     if (!this.isCurrentPlayer(submission.playerId)) {
       return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NOT_YOUR_TURN' };
     }
 
-    const playerIdx = this.state.players.findIndex((p) => p.id === submission.playerId);
-    if (playerIdx === -1) {
+    const applied = this.applyGuess(submission, false);
+    if (!applied) {
       return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'PLAYER_NOT_FOUND' };
     }
+
+    return {
+      accepted: true,
+      newVersion: this.version,
+      stateDelta: {
+        phase: this.state.phase,
+        players: this.state.players,
+        lastResult: this.state.lastResult,
+      },
+    };
+  }
+
+  /**
+   * Score a guess and move the match to the phase that follows it:
+   * - type mode:  full auto-grading → round_result (or buzzer after a timeout
+   *   when artist/title are still stealable)
+   * - speak mode: only year/timeline are auto-graded; artist/title points are
+   *   decided by the other players in reveal_vote
+   * Returns false when the player is unknown. Used by both the explicit
+   * submit command and the timeout auto-submit.
+   */
+  private applyGuess(submission: GuessSubmission, timedOut: boolean): boolean {
+    if (!this.state || !this.state.currentCard) return false;
+    const card = this.state.currentCard;
+
+    const playerIdx = this.state.players.findIndex((p) => p.id === submission.playerId);
+    if (playerIdx === -1) return false;
+
+    const speakMode = (this.state.settings?.guessMode ?? 'type') === 'speak';
 
     // All placed cards stay visible on the timeline, so every one of them
     // anchors the bucket check — not just the correctly placed ones
@@ -338,9 +404,15 @@ export class MatchRoom extends DurableObject {
       existingYears
     );
 
+    // Speak mode: artist/title are said aloud, so their auto-grading is
+    // meaningless — only count year + timeline now, votes add the rest.
+    const yearTimelinePoints =
+      (result.breakdown?.yearPoints ?? 0) + (result.breakdown?.timelinePoints ?? 0);
+    const points = speakMode ? yearTimelinePoints : result.points;
+
     this.state.players[playerIdx] = {
       ...this.state.players[playerIdx],
-      score: this.state.players[playerIdx].score + result.points,
+      score: this.state.players[playerIdx].score + points,
       hand: [...this.state.players[playerIdx].hand, card],
       placedCards: [
         ...this.state.players[playerIdx].placedCards,
@@ -348,9 +420,6 @@ export class MatchRoom extends DurableObject {
       ],
     };
 
-    // Pause on the reveal: everyone sees the result until the guesser
-    // explicitly continues (resolve_turn). Turn/round do NOT advance here.
-    this.state.phase = 'round_result';
     this.state.lastResult = {
       playerId: submission.playerId,
       playerName: this.state.players[playerIdx].name,
@@ -358,27 +427,263 @@ export class MatchRoom extends DurableObject {
       guessedArtist: submission.guessedArtist,
       guessedTitle: submission.guessedTitle,
       guessedYear: submission.guessedYear,
-      artistCorrect: result.artistCorrect,
-      titleCorrect: result.titleCorrect,
+      artistCorrect: speakMode ? false : result.artistCorrect,
+      titleCorrect: speakMode ? false : result.titleCorrect,
       yearExact: result.yearExact,
       timelineCorrect: result.timelineCorrect,
       yearDiff: result.yearDiff,
-      points: result.points,
+      points,
+      timedOut,
+      steal: null,
     };
+
+    const others = this.state.players.filter((p) => p.id !== submission.playerId);
+
+    if (speakMode && others.length > 0) {
+      // The other players decide whether artist/title were said correctly
+      this.state.phase = 'reveal_vote';
+      this.state.voting = {
+        deadline: Date.now() + VOTE_WINDOW_MS,
+        voterIds: others.map((p) => p.id),
+        votes: {},
+      };
+    } else if (
+      timedOut &&
+      this.state.settings?.buzzerEnabled &&
+      others.length > 0 &&
+      (!this.state.lastResult.artistCorrect || !this.state.lastResult.titleCorrect)
+    ) {
+      // Time ran out and a point is still stealable — open the buzzer window
+      this.state.phase = 'buzzer';
+      this.state.buzzer = {
+        openUntil: Date.now() + BUZZ_WINDOW_MS,
+        winnerId: null,
+        winnerName: null,
+        answerDeadline: null,
+      };
+    } else {
+      // Pause on the reveal: everyone sees the result until the guesser
+      // explicitly continues (resolve_turn). Turn/round do NOT advance here.
+      this.state.phase = 'round_result';
+    }
+
+    this.state.turnDeadline = null;
     this.state.version = ++this.version;
     this.liveInput = null;
     this.playback = null;
     this.persistState();
+    return true;
+  }
+
+  // ─── Timeouts (lazy — applied on every request) ───
+
+  private checkTimeouts(): void {
+    if (!this.state) return;
+    const now = Date.now();
+
+    // Active player ran out of answer time → auto-submit what they typed
+    if (
+      this.state.phase === 'guessing' &&
+      this.state.turnDeadline &&
+      now > this.state.turnDeadline + TIMEOUT_GRACE_MS
+    ) {
+      const activeId = this.state.turnOrder[this.state.currentPlayerIndex];
+      const live = this.liveInput && this.liveInput.playerId === activeId ? this.liveInput : null;
+      this.applyGuess({
+        playerId: activeId,
+        cardId: this.state.currentCard?.id ?? '',
+        guessedArtist: live?.artist ?? '',
+        guessedTitle: live?.title ?? '',
+        guessedYear: live?.year ?? FALLBACK_GUESS_YEAR,
+      }, true);
+      return;
+    }
+
+    // Buzzer window closed without a buzz → show the reveal
+    if (this.state.phase === 'buzzer' && this.state.buzzer) {
+      const b = this.state.buzzer;
+      if (!b.winnerId && now > b.openUntil + TIMEOUT_GRACE_MS) {
+        this.finishBuzzer(null);
+        return;
+      }
+      // Winner never answered → no steal
+      if (b.winnerId && b.answerDeadline && now > b.answerDeadline + TIMEOUT_GRACE_MS) {
+        this.finishBuzzer({
+          playerId: b.winnerId,
+          playerName: b.winnerName ?? '',
+          guess: '',
+          field: null,
+          points: 0,
+        });
+        return;
+      }
+    }
+
+    // Vote window closed → tally whatever votes came in
+    if (
+      this.state.phase === 'reveal_vote' &&
+      this.state.voting &&
+      now > this.state.voting.deadline + TIMEOUT_GRACE_MS
+    ) {
+      this.tallyVotes();
+    }
+  }
+
+  // ─── Buzzer ───
+
+  private buzz(command: CommandEnvelope): ResponseEnvelope {
+    if (!this.state || this.state.phase !== 'buzzer' || !this.state.buzzer) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NO_BUZZER_PHASE' };
+    }
+    const playerId = command.payload.playerId as string | undefined;
+    const player = this.state.players.find((p) => p.id === playerId);
+    if (!playerId || !player) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'PLAYER_NOT_FOUND' };
+    }
+    if (playerId === this.state.lastResult?.playerId) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'GUESSER_CANNOT_BUZZ' };
+    }
+    if (this.state.buzzer.winnerId) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'TOO_LATE' };
+    }
+
+    this.state.buzzer = {
+      ...this.state.buzzer,
+      winnerId: playerId,
+      winnerName: player.name,
+      answerDeadline: Date.now() + BUZZ_ANSWER_MS,
+    };
+    this.state.version = ++this.version;
+    this.persistState();
+
+    return { accepted: true, newVersion: this.version, stateDelta: { buzzer: this.state.buzzer } };
+  }
+
+  private buzzerAnswer(command: CommandEnvelope): ResponseEnvelope {
+    if (!this.state || this.state.phase !== 'buzzer' || !this.state.buzzer?.winnerId) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NO_BUZZER_PHASE' };
+    }
+    const playerId = command.payload.playerId as string | undefined;
+    if (playerId !== this.state.buzzer.winnerId) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NOT_BUZZER_WINNER' };
+    }
+
+    const text = String(command.payload.text ?? '').trim();
+    const card = this.state.lastResult?.card;
+    const lr = this.state.lastResult;
+
+    // One guess, matched against whichever field is still stealable.
+    // Fields the active player already got right cannot be stolen.
+    let field: 'artist' | 'title' | null = null;
+    if (card && lr && text) {
+      if (!lr.artistCorrect && isArtistMatch(text, card.artist)) field = 'artist';
+      else if (!lr.titleCorrect && isCloseMatch(text, card.title)) field = 'title';
+    }
+
+    const winnerIdx = this.state.players.findIndex((p) => p.id === playerId);
+    if (field && winnerIdx !== -1) {
+      this.state.players[winnerIdx] = {
+        ...this.state.players[winnerIdx],
+        score: this.state.players[winnerIdx].score + 1,
+      };
+    }
+
+    this.finishBuzzer({
+      playerId,
+      playerName: this.state.buzzer.winnerName ?? '',
+      guess: text,
+      field,
+      points: field ? 1 : 0,
+    });
 
     return {
       accepted: true,
       newVersion: this.version,
-      stateDelta: {
-        phase: this.state.phase,
-        players: this.state.players,
-        lastResult: this.state.lastResult,
+      stateDelta: { phase: this.state.phase, players: this.state.players, lastResult: this.state.lastResult },
+    };
+  }
+
+  /** Close the buzzer phase and show the reveal (steal may be null). */
+  private finishBuzzer(steal: NonNullable<MatchState['lastResult']>['steal']): void {
+    if (!this.state) return;
+    if (this.state.lastResult) {
+      this.state.lastResult = { ...this.state.lastResult, steal: steal ?? null };
+    }
+    this.state.phase = 'round_result';
+    this.state.buzzer = null;
+    this.state.version = ++this.version;
+    this.persistState();
+  }
+
+  // ─── Speak mode voting ───
+
+  private voteReveal(command: CommandEnvelope): ResponseEnvelope {
+    if (!this.state || this.state.phase !== 'reveal_vote' || !this.state.voting) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NO_VOTE_PHASE' };
+    }
+    const playerId = command.payload.playerId as string | undefined;
+    if (!playerId || !this.state.voting.voterIds.includes(playerId)) {
+      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NOT_A_VOTER' };
+    }
+
+    this.state.voting = {
+      ...this.state.voting,
+      votes: {
+        ...this.state.voting.votes,
+        [playerId]: {
+          artistOk: !!command.payload.artistOk,
+          titleOk: !!command.payload.titleOk,
+        },
       },
     };
+
+    const allVoted = this.state.voting.voterIds.every((id) => this.state!.voting!.votes[id]);
+    if (allVoted) {
+      this.tallyVotes();
+    } else {
+      this.state.version = ++this.version;
+      this.persistState();
+    }
+
+    return {
+      accepted: true,
+      newVersion: this.version,
+      stateDelta: { phase: this.state.phase, voting: this.state.voting, lastResult: this.state.lastResult },
+    };
+  }
+
+  /**
+   * Majority of cast votes decides artist/title; ties go to the guesser.
+   * No votes at all (window expired) → no extra points.
+   */
+  private tallyVotes(): void {
+    if (!this.state || !this.state.voting || !this.state.lastResult) return;
+    const votes = Object.values(this.state.voting.votes);
+    const majority = (key: 'artistOk' | 'titleOk') =>
+      votes.length > 0 && votes.filter((v) => v[key]).length * 2 >= votes.length;
+
+    const artistOk = majority('artistOk');
+    const titleOk = majority('titleOk');
+    const bonus = (artistOk ? 1 : 0) + (titleOk ? 1 : 0);
+
+    const idx = this.state.players.findIndex((p) => p.id === this.state!.lastResult!.playerId);
+    if (idx !== -1 && bonus > 0) {
+      this.state.players[idx] = {
+        ...this.state.players[idx],
+        score: this.state.players[idx].score + bonus,
+      };
+    }
+
+    this.state.lastResult = {
+      ...this.state.lastResult,
+      artistCorrect: artistOk,
+      titleCorrect: titleOk,
+      points: this.state.lastResult.points + bonus,
+    };
+    this.state.phase = 'round_result';
+    this.state.voting = null;
+    this.state.version = ++this.version;
+    this.persistState();
   }
 
   /**
@@ -410,6 +715,9 @@ export class MatchRoom extends DurableObject {
     this.state.phase = isGameOver ? 'finished' : 'drawing';
     this.state.currentCard = null;
     this.state.lastResult = null;
+    this.state.turnDeadline = null;
+    this.state.buzzer = null;
+    this.state.voting = null;
     this.state.version = ++this.version;
     this.liveInput = null;
     this.playback = null;

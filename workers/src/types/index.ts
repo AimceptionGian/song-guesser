@@ -22,6 +22,9 @@ export type CommandType =
   | 'submit_guess'
   | 'place_card'
   | 'resolve_turn'
+  | 'buzz'
+  | 'buzzer_answer'
+  | 'vote_reveal'
   | 'end_match';
 
 // ─── Lobby ───
@@ -45,6 +48,21 @@ export interface LobbySettings {
   maxPoints: number;
   timelineOnlyScoring: boolean;
   yearRange: { min: number; max: number };
+  /** How artist/title answers are given: typed (auto-graded) or spoken aloud (graded by the other players' votes). */
+  guessMode: GuessMode;
+  /** Answer time limit in seconds for the active player; 0 = no limit. */
+  answerTimeSec: number;
+  /** After the active player's time runs out, others may buzz to steal 1 point. Needs answerTimeSec > 0 and guessMode 'type'. */
+  buzzerEnabled: boolean;
+}
+
+export type GuessMode = 'type' | 'speak';
+
+/** The subset of lobby settings the match state machine needs. */
+export interface MatchSettings {
+  guessMode: GuessMode;
+  answerTimeSec: number;
+  buzzerEnabled: boolean;
 }
 
 export interface PlayerProfile {
@@ -68,8 +86,34 @@ export interface MatchState {
   deck: Card[];
   turnOrder: string[];
   startedAt: number;
+  settings: MatchSettings;
+  /** Epoch ms when the active player's answer time ends; null = no limit. */
+  turnDeadline?: number | null;
+  /** Set while phase is 'buzzer': who may steal and until when. */
+  buzzer?: BuzzerState | null;
+  /** Set while phase is 'reveal_vote' (speak mode): the running vote. */
+  voting?: VoteState | null;
   /** Set while phase is 'round_result': the reveal everyone should see. */
   lastResult?: RoundReveal | null;
+}
+
+/** Buzzer window after the active player's time ran out. */
+export interface BuzzerState {
+  /** Epoch ms until which players may buzz. */
+  openUntil: number;
+  winnerId: string | null;
+  winnerName: string | null;
+  /** Epoch ms until which the buzzer winner may answer. */
+  answerDeadline: number | null;
+}
+
+/** Speak mode: the other players decide whether artist/title were said correctly. */
+export interface VoteState {
+  /** Epoch ms when voting closes even if not everyone voted. */
+  deadline: number;
+  /** Player ids eligible to vote (everyone except the guesser). */
+  voterIds: string[];
+  votes: Record<string, { artistOk: boolean; titleOk: boolean }>;
 }
 
 /** Result of a guess, revealed to all players until the guesser continues. */
@@ -85,6 +129,20 @@ export interface RoundReveal {
   yearExact: boolean;
   timelineCorrect: boolean;
   yearDiff: number;
+  points: number;
+  /** True when the guess was auto-submitted because the answer time ran out. */
+  timedOut?: boolean;
+  /** Set when a buzzer player stole a point (or tried to). */
+  steal?: StealResult | null;
+}
+
+/** Outcome of a buzzer steal attempt. */
+export interface StealResult {
+  playerId: string;
+  playerName: string;
+  guess: string;
+  /** Which field the steal matched; null = missed. */
+  field: 'artist' | 'title' | null;
   points: number;
 }
 
@@ -111,6 +169,8 @@ export type MatchPhase =
   | 'drawing'
   | 'guessing'
   | 'evaluating'
+  | 'buzzer'
+  | 'reveal_vote'
   | 'round_result'
   | 'finished';
 

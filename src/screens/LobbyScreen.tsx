@@ -6,8 +6,10 @@ import {
   clearLobbySession,
   saveHistoryCache,
   getHistoryCache,
+  getLobbyPrefs,
+  saveLobbyPrefs,
 } from '../services/api-client';
-import type { CategoryInfo, CategoryAvailability } from '../services/api-client';
+import type { CategoryInfo, CategoryAvailability, LobbyPrefs } from '../services/api-client';
 import {
   beginSpotifyAuth,
   exchangeCodeForToken,
@@ -39,6 +41,9 @@ export default function LobbyScreen() {
     totalRounds: number;
     maxPoints: number;
     yearRange: { min: number; max: number };
+    guessMode: 'type' | 'speak';
+    answerTimeSec: number;
+    buzzerEnabled: boolean;
   } | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -68,6 +73,9 @@ export default function LobbyScreen() {
           totalRounds: lobby.settings.totalRounds,
           maxPoints: lobby.settings.maxPoints,
           yearRange: lobby.settings.yearRange,
+          guessMode: lobby.settings.guessMode ?? 'type',
+          answerTimeSec: lobby.settings.answerTimeSec ?? 0,
+          buzzerEnabled: lobby.settings.buzzerEnabled ?? false,
         });
         setSelectedCategory(lobby.category ?? DEFAULT_CATEGORY);
         setCategoryAvailability(lobby.categoryAvailability ?? {});
@@ -239,15 +247,20 @@ export default function LobbyScreen() {
     setLoading(true);
     setError(null);
     try {
+      // Last-used settings from this browser pre-fill the new lobby
+      const prefs = getLobbyPrefs();
       const result = await api.createLobby({
         hostName: playerName || 'Host',
         hostAvatar: '🎵',
         settings: {
           maxPlayers: 4,
-          totalRounds: 5,
+          totalRounds: prefs.totalRounds,
           maxPoints: 4,
           timelineOnlyScoring: false,
           yearRange: { min: 1960, max: 2024 },
+          guessMode: prefs.guessMode,
+          answerTimeSec: prefs.answerTimeSec,
+          buzzerEnabled: prefs.buzzerEnabled,
         },
       });
       setLobbyCode(result.code);
@@ -338,16 +351,40 @@ export default function LobbyScreen() {
     }
   };
 
-  const handleChangeRounds = async (delta: number) => {
+  /**
+   * Host changes a rule: optimistic UI, push to the lobby, and remember it
+   * in this browser so the next created lobby starts with the same rules.
+   */
+  const handleChangeSetting = async (patch: Partial<LobbyPrefs>) => {
     if (!isHost || !lobbySettings) return;
-    const next = Math.max(3, Math.min(10, lobbySettings.totalRounds + delta));
-    if (next === lobbySettings.totalRounds) return;
-    setLobbySettings({ ...lobbySettings, totalRounds: next }); // optimistic
+    const next = { ...lobbySettings, ...patch };
+    // Buzzer needs a running clock and typed answers
+    if (next.answerTimeSec === 0 || next.guessMode === 'speak') {
+      next.buzzerEnabled = false;
+    }
+    setLobbySettings(next); // optimistic
+    saveLobbyPrefs({
+      totalRounds: next.totalRounds,
+      guessMode: next.guessMode,
+      answerTimeSec: next.answerTimeSec,
+      buzzerEnabled: next.buzzerEnabled,
+    });
     try {
-      await api.updateSettings(lobbyCode, { totalRounds: next });
+      await api.updateSettings(lobbyCode, {
+        totalRounds: next.totalRounds,
+        guessMode: next.guessMode,
+        answerTimeSec: next.answerTimeSec,
+        buzzerEnabled: next.buzzerEnabled,
+      });
     } catch {
       setError('Einstellung konnte nicht gespeichert werden.');
     }
+  };
+
+  const handleChangeRounds = (delta: number) => {
+    if (!lobbySettings) return;
+    const next = Math.max(3, Math.min(10, lobbySettings.totalRounds + delta));
+    if (next !== lobbySettings.totalRounds) handleChangeSetting({ totalRounds: next });
   };
 
   const displayInfo = mode === 'join' && lobbyInfo && phase === 'form'
@@ -543,16 +580,17 @@ export default function LobbyScreen() {
           )}
         </div>
 
-        {/* Settings: cards per player (host adjustable) */}
+        {/* Settings (host adjustable, everyone sees them) */}
         <div className="fade-up" style={{
-          display: 'grid', gridTemplateColumns: '1fr', gap: 12,
+          display: 'grid', gridTemplateColumns: '1fr', gap: 10,
           width: '100%', maxWidth: 400, animationDelay: '0.18s',
         }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '14px 16px', borderRadius: 12,
-            background: 'rgba(168,85,247,0.07)', border: '1px solid rgba(168,85,247,0.15)',
-          }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>⚙️ Regeln {isHost ? '' : '(nur Host)'}</span>
+          </div>
+
+          {/* Cards per player */}
+          <div style={settingRowStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{ fontSize: 20 }}>🃏</span>
               <span style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>Karten pro Spieler</span>
@@ -579,6 +617,81 @@ export default function LobbyScreen() {
                 >+</button>
               )}
             </div>
+          </div>
+
+          {/* Guess mode: type vs. speak */}
+          <div style={settingRowStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 20 }}>{(lobbySettings?.guessMode ?? 'type') === 'speak' ? '🗣️' : '⌨️'}</span>
+              <div>
+                <div style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>Rate-Modus</div>
+                <div style={{ color: '#6a5f8a', fontSize: '0.68rem', marginTop: 2 }}>
+                  {(lobbySettings?.guessMode ?? 'type') === 'speak'
+                    ? 'Laut ansagen — Mitspieler bewerten'
+                    : 'Eintippen — automatische Wertung'}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <OptionChip
+                active={(lobbySettings?.guessMode ?? 'type') === 'type'}
+                disabled={!isHost}
+                onClick={() => handleChangeSetting({ guessMode: 'type' })}
+              >⌨️ Tippen</OptionChip>
+              <OptionChip
+                active={(lobbySettings?.guessMode ?? 'type') === 'speak'}
+                disabled={!isHost}
+                onClick={() => handleChangeSetting({ guessMode: 'speak' })}
+              >🗣️ Ansagen</OptionChip>
+            </div>
+          </div>
+
+          {/* Answer time */}
+          <div style={settingRowStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 20 }}>⏱️</span>
+              <div>
+                <div style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>Antwortzeit</div>
+                <div style={{ color: '#6a5f8a', fontSize: '0.68rem', marginTop: 2 }}>
+                  {(lobbySettings?.answerTimeSec ?? 0) === 0 ? 'Kein Zeitlimit' : 'Pro Zug, ab Karte ziehen'}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {[0, 30, 45, 60, 90].map((secs) => (
+                <OptionChip
+                  key={secs}
+                  active={(lobbySettings?.answerTimeSec ?? 0) === secs}
+                  disabled={!isHost}
+                  onClick={() => handleChangeSetting({ answerTimeSec: secs })}
+                >{secs === 0 ? 'Aus' : `${secs}s`}</OptionChip>
+              ))}
+            </div>
+          </div>
+
+          {/* Buzzer */}
+          <div style={{
+            ...settingRowStyle,
+            opacity: (lobbySettings?.answerTimeSec ?? 0) > 0 && (lobbySettings?.guessMode ?? 'type') === 'type' ? 1 : 0.45,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 20 }}>🔔</span>
+              <div>
+                <div style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>Buzzer</div>
+                <div style={{ color: '#6a5f8a', fontSize: '0.68rem', marginTop: 2 }}>
+                  {(lobbySettings?.answerTimeSec ?? 0) === 0
+                    ? 'Braucht eine Antwortzeit'
+                    : (lobbySettings?.guessMode ?? 'type') === 'speak'
+                      ? 'Nur im Tipp-Modus'
+                      : 'Nach Zeitablauf: 1 Punkt klauen'}
+                </div>
+              </div>
+            </div>
+            <OptionChip
+              active={!!lobbySettings?.buzzerEnabled}
+              disabled={!isHost || (lobbySettings?.answerTimeSec ?? 0) === 0 || (lobbySettings?.guessMode ?? 'type') === 'speak'}
+              onClick={() => handleChangeSetting({ buzzerEnabled: !lobbySettings?.buzzerEnabled })}
+            >{lobbySettings?.buzzerEnabled ? 'An' : 'Aus'}</OptionChip>
           </div>
         </div>
 
@@ -737,6 +850,34 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
     </button>
   );
 }
+
+function OptionChip({ active, disabled, onClick, children }: {
+  active: boolean; disabled?: boolean; onClick: () => void; children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: '6px 12px', borderRadius: 8,
+        border: active ? '1px solid rgba(6,214,160,0.6)' : '1px solid rgba(168,85,247,0.25)',
+        background: active ? 'rgba(6,214,160,0.12)' : 'transparent',
+        color: active ? '#06d6a0' : '#8b7fb8',
+        fontSize: '0.75rem', fontWeight: 600,
+        cursor: disabled ? 'default' : 'pointer',
+        transition: 'all 0.15s',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+const settingRowStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+  padding: '12px 14px', borderRadius: 12,
+  background: 'rgba(168,85,247,0.07)', border: '1px solid rgba(168,85,247,0.15)',
+};
 
 const stepperButtonStyle = (disabled: boolean): React.CSSProperties => ({
   width: 30, height: 30, borderRadius: 8, border: '1px solid rgba(168,85,247,0.35)',

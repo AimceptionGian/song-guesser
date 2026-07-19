@@ -42,7 +42,7 @@ function makeLobby(overrides: Partial<Lobby> = {}): Lobby {
     hostId: 'host-1',
     players: [{ id: 'host-1', name: 'Host', avatar: '🎮', joinedAt: Date.now() }],
     state: 'waiting',
-    settings: { maxPlayers: 4, totalRounds: 5, maxPoints: 1000, timelineOnlyScoring: false, yearRange: { min: 1960, max: 2024 } },
+    settings: { maxPlayers: 4, totalRounds: 5, maxPoints: 1000, timelineOnlyScoring: false, yearRange: { min: 1960, max: 2024 }, guessMode: 'type', answerTimeSec: 0, buzzerEnabled: false },
     category: null,
     createdAt: Date.now(),
     ...overrides,

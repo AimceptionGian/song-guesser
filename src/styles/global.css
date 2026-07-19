@@ -235,6 +235,56 @@ html, body {
   box-shadow: none;
 }
 
+/* ─── Game HUD / gamification ─── */
+
+/* Big red buzzer — impossible to miss */
+@keyframes buzzerPulse {
+  0%, 100% { box-shadow: 0 0 25px rgba(255, 77, 109, 0.5); transform: scale(1); }
+  50% { box-shadow: 0 0 55px rgba(255, 77, 109, 0.9); transform: scale(1.04); }
+}
+.buzzer-button {
+  width: min(180px, 60vw);
+  height: min(180px, 60vw);
+  margin: 0 auto;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.25);
+  background: radial-gradient(circle at 35% 30%, #ff6b8a, #e11d48 65%, #9f1239);
+  color: white;
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: clamp(1.6rem, 8vw, 2.2rem);
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  animation: buzzerPulse 1.1s ease-in-out infinite;
+  transition: transform 0.1s;
+}
+.buzzer-button:active {
+  transform: scale(0.92);
+  animation: none;
+}
+
+/* Urgent timer shake */
+@keyframes timerShake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-1.5px); }
+  75% { transform: translateX(1.5px); }
+}
+.timer-urgent {
+  animation: timerShake 0.4s linear infinite;
+}
+
+/* Mobile: tighter HUD spacing */
+@media (max-width: 480px) {
+  .game-hud {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    padding: 10px 4px 12px;
+    margin: -10px -4px 8px;
+    background: linear-gradient(to bottom, rgba(10, 10, 18, 0.97) 80%, rgba(10, 10, 18, 0));
+    backdrop-filter: blur(6px);
+  }
+}
+
 /* Hide element visually but keep accessible */
 .sr-only {
   position: absolute;

@@ -6,7 +6,7 @@ import AudioPlayer from '../components/AudioPlayer';
 import Scoreboard from '../components/Scoreboard';
 import { MIN_YEAR, MAX_YEAR } from '../constants';
 import { api, getLobbySession, clearLobbySession } from '../services/api-client';
-import type { Song, Player, LiveInput, PlaybackState, RoundReveal } from '../types';
+import type { Song, Player, LiveInput, PlaybackState, RoundReveal, MatchSettings, BuzzerState, VoteState } from '../types';
 
 /** Backend players carry {card}; the frontend expects {song}. */
 function convertPlayers(state: any): Player[] {
@@ -41,8 +41,19 @@ export default function GameScreen() {
   const [playback, setPlayback] = useState<PlaybackState | null>(null);
   const [phase, setPhase] = useState<string>('drawing');
   const [roundResult, setRoundResult] = useState<RoundReveal | null>(null);
+  const [settings, setSettings] = useState<MatchSettings | null>(null);
+  const [turnDeadline, setTurnDeadline] = useState<number | null>(null);
+  const [buzzer, setBuzzer] = useState<BuzzerState | null>(null);
+  const [voting, setVoting] = useState<VoteState | null>(null);
+  // Server-clock offset (serverNow - clientNow) so countdowns don't drift
+  const clockOffsetRef = useRef(0);
+  const [nowTick, setNowTick] = useState(Date.now());
+  const [buzzerGuess, setBuzzerGuess] = useState('');
+  const [myVote, setMyVote] = useState<{ artistOk: boolean; titleOk: boolean } | null>(null);
+  const [voteSent, setVoteSent] = useState(false);
 
   const currentPlayer = players[currentPlayerIndex] || players[0];
+  const speakMode = settings?.guessMode === 'speak';
 
   // Own identity from the lobby session; only valid for this game's code.
   // Without a session (direct URL / solo flow) everything stays enabled.
@@ -123,6 +134,13 @@ export default function GameScreen() {
     if (typeof state.totalRounds === 'number') setTotalRounds(state.totalRounds);
     if (typeof state.phase === 'string') setPhase(state.phase);
     setRoundResult((state.lastResult as RoundReveal | undefined) ?? null);
+    if (state.settings) setSettings(state.settings as MatchSettings);
+    setTurnDeadline((state.turnDeadline as number | undefined) ?? null);
+    setBuzzer((state.buzzer as BuzzerState | undefined) ?? null);
+    setVoting((state.voting as VoteState | undefined) ?? null);
+    if (typeof state.serverNow === 'number') {
+      clockOffsetRef.current = state.serverNow - Date.now();
+    }
     if (state.phase === 'guessing' && state.currentCard) {
       setCurrentCard(state.currentCard as Song);
       setSelectedCard(state.currentCard as Song);
@@ -183,6 +201,44 @@ export default function GameScreen() {
     }, 400);
     return () => clearTimeout(t);
   }, [artistInput, titleInput, timelineYear, selfId, isMyTurn, currentCard, gameCode]);
+
+  // ─── Countdown tick + deadline poke ───
+  // The server enforces deadlines lazily (each request applies expired
+  // timers), so when a countdown hits zero we poke /state once to make the
+  // transition happen right away instead of on the next 1.5s poll.
+  const activeDeadline =
+    phase === 'guessing' ? turnDeadline
+    : phase === 'buzzer' ? (buzzer?.winnerId ? buzzer?.answerDeadline : buzzer?.openUntil) ?? null
+    : phase === 'reveal_vote' ? voting?.deadline ?? null
+    : null;
+
+  const pokedDeadlineRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!activeDeadline) return;
+    const id = setInterval(() => {
+      setNowTick(Date.now());
+      const serverNow = Date.now() + clockOffsetRef.current;
+      if (serverNow > activeDeadline + 1200 && pokedDeadlineRef.current !== activeDeadline && gameCode) {
+        pokedDeadlineRef.current = activeDeadline;
+        api.getGameState(gameCode).then(syncState).catch(() => {});
+      }
+    }, 250);
+    return () => clearInterval(id);
+  }, [activeDeadline, gameCode, syncState]);
+
+  /** Seconds left on the active deadline (server clock), or null. */
+  const secondsLeft = activeDeadline
+    ? Math.max(0, Math.ceil((activeDeadline - (nowTick + clockOffsetRef.current)) / 1000))
+    : null;
+
+  // Reset per-turn transients whenever a new card/turn begins
+  useEffect(() => {
+    if (phase === 'drawing' || phase === 'guessing') {
+      setBuzzerGuess('');
+      setMyVote(null);
+      setVoteSent(false);
+    }
+  }, [phase, currentPlayerIndex, round]);
 
   // ─── Leave game ───
   const handleLeaveGame = useCallback(() => {
@@ -285,10 +341,22 @@ export default function GameScreen() {
       const res = await api.submitGuess(gameCode, {
         playerId: selfId ?? currentPlayer?.id ?? 'local-player',
         cardId: currentCard.id,
-        guessedArtist: artistInput,
-        guessedTitle: titleInput,
+        // Speak mode: the answer was said aloud — nothing typed to grade
+        guessedArtist: speakMode ? '' : artistInput,
+        guessedTitle: speakMode ? '' : titleInput,
         guessedYear: timelineYear,
       });
+
+      // Multiplayer: stay here — the shared reveal (and in speak mode the
+      // vote) is rendered phase-based for everyone, including the guesser.
+      if (selfId) {
+        if (res.state) syncState(res.state);
+        setArtistInput('');
+        setTitleInput('');
+        setIsLoading(false);
+        return;
+      }
+
       const reveal = (res.state as any)?.lastResult as RoundReveal | undefined;
       if (reveal) {
         resultPayload = {
@@ -309,6 +377,7 @@ export default function GameScreen() {
       // Offline — keep the locally computed result
     }
 
+    // Solo flow keeps the dedicated result screen
     navigate('/result', {
       state: {
         ...resultPayload,
@@ -318,9 +387,36 @@ export default function GameScreen() {
         gameCode,
       },
     });
-  }, [currentCard, artistInput, titleInput, timelineYear, players, currentPlayerIndex, round, totalRounds, gameCode, currentPlayer, navigate, selfId]);
+  }, [currentCard, artistInput, titleInput, timelineYear, players, currentPlayerIndex, round, totalRounds, gameCode, currentPlayer, navigate, selfId, speakMode, syncState]);
 
-  const isLastPlayer = currentPlayerIndex === players.length - 1;
+  // ─── Buzzer actions ───
+  const handleBuzz = useCallback(async () => {
+    if (!gameCode || !selfId) return;
+    try {
+      const res = await api.buzz(gameCode, selfId);
+      if (res.state) syncState(res.state);
+    } catch { /* poll will catch up */ }
+  }, [gameCode, selfId, syncState]);
+
+  const handleBuzzerAnswer = useCallback(async () => {
+    if (!gameCode || !selfId || !buzzerGuess.trim()) return;
+    try {
+      const res = await api.buzzerAnswer(gameCode, selfId, buzzerGuess.trim());
+      if (res.state) syncState(res.state);
+    } catch { /* poll will catch up */ }
+  }, [gameCode, selfId, buzzerGuess, syncState]);
+
+  // ─── Speak mode vote ───
+  const handleSendVote = useCallback(async () => {
+    if (!gameCode || !selfId || !myVote) return;
+    setVoteSent(true);
+    try {
+      const res = await api.voteReveal(gameCode, { playerId: selfId, ...myVote });
+      if (res.state) syncState(res.state);
+    } catch {
+      setVoteSent(false);
+    }
+  }, [gameCode, selfId, myVote, syncState]);
 
   return (
     <div
@@ -335,52 +431,242 @@ export default function GameScreen() {
         zIndex: 1,
       }}
     >
-      {/* Top Bar */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          width: '100%',
-          maxWidth: 720,
-          marginBottom: 16,
-          gap: 8,
-        }}
-      >
-        <Pill color="purple">Karte {round} / {totalRounds}</Pill>
-        <Pill color="gold">
-          {currentPlayer?.avatar} {currentPlayer?.name} ist am Zug
-        </Pill>
-        <button
-          onClick={handleLeaveGame}
-          title="Spiel verlassen"
+      {/* ─── Game HUD: progress, turn, timer, leave ─── */}
+      <div className="game-hud" style={{ width: '100%', maxWidth: 720, marginBottom: 14 }}>
+        <div
           style={{
-            padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(255,77,109,0.3)',
-            background: 'rgba(255,77,109,0.08)', color: '#ff4d6d', cursor: 'pointer',
-            fontFamily: "'JetBrains Mono', monospace", fontSize: '0.78rem', fontWeight: 600,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 8, marginBottom: 8, flexWrap: 'wrap',
           }}
         >
-          ✕ Verlassen
-        </button>
+          <Pill color="purple">🃏 Karte {round}/{totalRounds}</Pill>
+          <Pill color={isMyTurn ? 'green' : 'gold'}>
+            {isMyTurn ? '🎯 Du bist am Zug!' : `👀 ${currentPlayer?.avatar ?? ''} ${activePlayerName} ist am Zug`}
+          </Pill>
+          <button
+            onClick={handleLeaveGame}
+            title="Spiel verlassen"
+            style={{
+              padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(255,77,109,0.3)',
+              background: 'rgba(255,77,109,0.08)', color: '#ff4d6d', cursor: 'pointer',
+              fontFamily: "'JetBrains Mono', monospace", fontSize: '0.78rem', fontWeight: 600,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Round progress bar */}
+        <div style={{ height: 5, borderRadius: 3, background: 'rgba(168,85,247,0.12)', overflow: 'hidden' }}>
+          <div style={{
+            height: '100%', borderRadius: 3,
+            width: `${Math.min(100, Math.round(((round - 1) / Math.max(1, totalRounds)) * 100))}%`,
+            background: 'linear-gradient(90deg, #7c3aed, #a855f7, #f72585)',
+            transition: 'width 0.5s ease',
+          }} />
+        </div>
+
+        {/* Player chips — everyone at a glance, active player highlighted */}
+        {players.length > 1 && (
+          <div style={{
+            display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap',
+          }}>
+            {players.map((p, i) => {
+              const isActive = i === currentPlayerIndex;
+              const best = Math.max(...players.map((x) => x.score));
+              const leads = p.score > 0 && p.score === best;
+              return (
+                <div key={p.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '5px 10px', borderRadius: 20,
+                  background: isActive ? 'rgba(6,214,160,0.12)' : 'rgba(168,85,247,0.07)',
+                  border: isActive ? '1px solid rgba(6,214,160,0.45)' : '1px solid rgba(168,85,247,0.15)',
+                  boxShadow: isActive ? '0 0 12px rgba(6,214,160,0.25)' : 'none',
+                  transition: 'all 0.3s',
+                }}>
+                  <span style={{ fontSize: 14 }}>{p.avatar}</span>
+                  <span style={{
+                    color: isActive ? '#06d6a0' : '#c4b8ff', fontSize: '0.75rem', fontWeight: 600,
+                    maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    {p.name}{p.id === selfId ? ' (du)' : ''}
+                  </span>
+                  <span style={{
+                    fontFamily: "'Bebas Neue', sans-serif", fontSize: '0.95rem',
+                    color: leads ? '#ffd60a' : '#a855f7',
+                  }}>
+                    {leads && '👑'}{p.score}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Answer timer */}
+        {phase === 'guessing' && turnDeadline && secondsLeft !== null && settings && (
+          <TimerBar
+            secondsLeft={secondsLeft}
+            totalSec={settings.answerTimeSec}
+            label={isMyTurn ? 'Deine Antwortzeit' : `Antwortzeit von ${activePlayerName}`}
+          />
+        )}
       </div>
 
-      {/* Spectator banner */}
-      {!isMyTurn && (
-        <div
-          className="fade-up"
-          style={{
-            width: '100%', maxWidth: 720, marginBottom: 12,
-            padding: '10px 16px', borderRadius: 12, textAlign: 'center',
-            background: 'rgba(255,214,10,0.08)', border: '1px solid rgba(255,214,10,0.25)',
-            color: '#ffd60a', fontSize: '0.85rem', fontWeight: 600,
-          }}
-        >
-          👀 {activePlayerName} ist am Zug — du schaust zu und kannst mithören
-        </div>
-      )}
-
       <div style={{ width: '100%', maxWidth: 720, display: 'grid', gap: 14 }}>
+        {/* ─── Buzzer phase: time ran out, a point is stealable ─── */}
+        {phase === 'buzzer' && roundResult && (
+          <div
+            className="pop-in"
+            style={{
+              borderRadius: 16, padding: 20, textAlign: 'center',
+              background: 'linear-gradient(135deg, #2e1c1c 0%, #1f1212 100%)',
+              border: '1px solid rgba(255,77,109,0.35)',
+              display: 'grid', gap: 12,
+            }}
+          >
+            <div style={{ color: '#ffd60a', fontWeight: 700, fontSize: '0.95rem' }}>
+              ⏰ Zeit abgelaufen bei {roundResult.playerName}!
+            </div>
+
+            {!buzzer?.winnerId ? (
+              <>
+                <div style={{ color: '#8b7fb8', fontSize: '0.82rem' }}>
+                  Wer zuerst buzzert, darf Interpret <em>oder</em> Titel raten — 1 Punkt!
+                </div>
+                {secondsLeft !== null && (
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: '1.6rem', color: '#ff4d6d' }}>
+                    {secondsLeft}s
+                  </div>
+                )}
+                {selfId && selfId !== roundResult.playerId ? (
+                  <button onClick={handleBuzz} className="buzzer-button">
+                    🔔 BUZZ!
+                  </button>
+                ) : (
+                  <div style={{ color: '#8b7fb8', fontSize: '0.82rem' }}>
+                    Die anderen können jetzt buzzern…
+                  </div>
+                )}
+              </>
+            ) : buzzer.winnerId === selfId ? (
+              <>
+                <div style={{ color: '#06d6a0', fontWeight: 700 }}>
+                  🔔 Du warst am schnellsten! Interpret ODER Titel:
+                </div>
+                {secondsLeft !== null && (
+                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.85rem', color: '#ff4d6d' }}>
+                    noch {secondsLeft}s
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    className="text-input"
+                    type="text"
+                    autoFocus
+                    placeholder="Interpret oder Titel…"
+                    value={buzzerGuess}
+                    onChange={(e) => setBuzzerGuess(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleBuzzerAnswer(); }}
+                  />
+                  <button
+                    onClick={handleBuzzerAnswer}
+                    disabled={!buzzerGuess.trim()}
+                    style={{
+                      padding: '10px 18px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                      background: 'linear-gradient(135deg, #7c3aed, #a855f7)', color: 'white',
+                      fontWeight: 700, whiteSpace: 'nowrap', opacity: buzzerGuess.trim() ? 1 : 0.5,
+                    }}
+                  >
+                    ✓
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div style={{ color: '#ffd60a', fontSize: '0.9rem', fontWeight: 600 }}>
+                🔔 {buzzer.winnerName} hat gebuzzert und rät…
+                {secondsLeft !== null && <span style={{ color: '#8b7fb8' }}> ({secondsLeft}s)</span>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ─── Speak mode: the others judge the spoken answer ─── */}
+        {phase === 'reveal_vote' && roundResult && (
+          <div
+            className="pop-in"
+            style={{
+              borderRadius: 16, padding: 20,
+              background: 'linear-gradient(135deg, #1e1c2e 0%, #13121f 100%)',
+              border: '1px solid rgba(255,214,10,0.3)',
+              display: 'grid', gap: 12,
+            }}
+          >
+            <div style={{ textAlign: 'center', color: '#ffd60a', fontWeight: 700, fontSize: '0.95rem' }}>
+              🗣️ {roundResult.playerName} hat angesagt — das war der Song:
+            </div>
+
+            <div style={{
+              padding: 12, borderRadius: 12, textAlign: 'center',
+              background: 'rgba(168,85,247,0.08)', border: '1px solid rgba(168,85,247,0.15)',
+            }}>
+              <div style={{ fontSize: 28, marginBottom: 2 }}>{roundResult.card.emoji}</div>
+              <div style={{
+                fontFamily: "'Bebas Neue', sans-serif", fontSize: '1.4rem',
+                background: 'linear-gradient(90deg, #a855f7, #f72585)',
+                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+              }}>
+                {roundResult.card.artist} — {roundResult.card.title}
+              </div>
+              <div style={{ color: '#8b7fb8', fontSize: '0.8rem', marginTop: 2 }}>{roundResult.card.year}</div>
+            </div>
+
+            {selfId && voting?.voterIds.includes(selfId) && !voteSent && !voting.votes[selfId] ? (
+              <>
+                <div style={{ textAlign: 'center', color: '#8b7fb8', fontSize: '0.82rem' }}>
+                  Hat {roundResult.playerName} es richtig angesagt?
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <VoteToggle
+                    label="🎤 Interpret"
+                    value={myVote?.artistOk ?? null}
+                    onChange={(ok) => setMyVote((v) => ({ artistOk: ok, titleOk: v?.titleOk ?? false }))}
+                  />
+                  <VoteToggle
+                    label="🎶 Titel"
+                    value={myVote?.titleOk ?? null}
+                    onChange={(ok) => setMyVote((v) => ({ artistOk: v?.artistOk ?? false, titleOk: ok }))}
+                  />
+                </div>
+                <button
+                  onClick={handleSendVote}
+                  disabled={!myVote}
+                  style={{
+                    padding: '12px 24px', borderRadius: 12, border: 'none',
+                    cursor: myVote ? 'pointer' : 'default',
+                    background: myVote ? 'linear-gradient(135deg, #7c3aed, #a855f7)' : 'rgba(168,85,247,0.15)',
+                    color: 'white', fontWeight: 700, opacity: myVote ? 1 : 0.6,
+                  }}
+                >
+                  Bewertung abschicken ✓
+                </button>
+              </>
+            ) : (
+              <div style={{ textAlign: 'center', color: '#8b7fb8', fontSize: '0.82rem' }}>
+                {selfId === roundResult.playerId
+                  ? '⏳ Die anderen bewerten deine Ansage…'
+                  : '✓ Bewertung abgegeben — warte auf die anderen…'}
+                {voting && (
+                  <div style={{ marginTop: 6, fontFamily: "'JetBrains Mono', monospace", fontSize: '0.75rem' }}>
+                    {Object.keys(voting.votes).length}/{voting.voterIds.length} Stimmen
+                    {secondsLeft !== null && ` · ${secondsLeft}s`}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Round reveal — shown to everyone until the guesser continues */}
         {phase === 'round_result' && roundResult && (
           <div
@@ -396,7 +682,7 @@ export default function GameScreen() {
           >
             <div style={{ textAlign: 'center' }}>
               <div style={{ color: '#8b7fb8', fontSize: '0.8rem' }}>
-                {roundResult.playerName} hat geraten
+                {roundResult.timedOut ? `⏰ Zeit abgelaufen — ${roundResult.playerName}` : `${roundResult.playerName} hat geraten`}
               </div>
               <div
                 style={{
@@ -443,6 +729,24 @@ export default function GameScreen() {
               <RevealCheck label="📊 Timeline" ok={roundResult.timelineCorrect} />
             </div>
 
+            {/* Buzzer steal outcome */}
+            {roundResult.steal && (
+              <div style={{
+                padding: '10px 12px', borderRadius: 10, textAlign: 'center', fontSize: '0.85rem',
+                background: roundResult.steal.points > 0 ? 'rgba(255,214,10,0.08)' : 'rgba(255,77,109,0.06)',
+                border: roundResult.steal.points > 0 ? '1px solid rgba(255,214,10,0.25)' : '1px solid rgba(255,77,109,0.15)',
+                color: roundResult.steal.points > 0 ? '#ffd60a' : '#8b7fb8',
+              }}>
+                {roundResult.steal.points > 0 ? (
+                  <>🔔 <strong>{roundResult.steal.playerName}</strong> hat den {roundResult.steal.field === 'artist' ? 'Interpreten' : 'Titel'} abgestaubt: +1 Punkt!</>
+                ) : roundResult.steal.guess ? (
+                  <>🔔 {roundResult.steal.playerName} hat gebuzzert, aber „{roundResult.steal.guess}" war nicht richtig.</>
+                ) : (
+                  <>🔔 {roundResult.steal.playerName} hat gebuzzert, aber nicht geantwortet.</>
+                )}
+              </div>
+            )}
+
             {roundResult.playerId === selfId ? (
               <button
                 onClick={async () => {
@@ -468,7 +772,7 @@ export default function GameScreen() {
         )}
 
         {/* Current Song Card */}
-        {currentCard && phase !== 'round_result' && (
+        {currentCard && phase === 'guessing' && (
           <div
             className="pop-in"
             style={{
@@ -542,8 +846,19 @@ export default function GameScreen() {
 
         {/* Inputs + Audio */}
         <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gap: 10 }}>
-          {currentCard && phase !== 'round_result' && (
+          {currentCard && phase === 'guessing' && (
           <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gap: 10 }}>
+            {speakMode ? (
+              <div style={{
+                padding: '12px 16px', borderRadius: 12, textAlign: 'center',
+                background: 'rgba(255,214,10,0.06)', border: '1px dashed rgba(255,214,10,0.3)',
+                color: '#ffd60a', fontSize: '0.85rem', fontWeight: 600,
+              }}>
+                {isMyTurn
+                  ? '🗣️ Sag Interpret & Titel laut an — die anderen bewerten danach!'
+                  : `👂 ${activePlayerName} sagt die Antwort laut an — gleich bewertest du sie!`}
+              </div>
+            ) : (
             <div
               className="grid-2"
             >
@@ -570,6 +885,7 @@ export default function GameScreen() {
                 />
               </InputGroup>
             </div>
+            )}
 
             <AudioPlayer
               previewUrl={currentCard.previewUrl}
@@ -623,6 +939,8 @@ export default function GameScreen() {
                     <span className="spinner" />
                     Wird geladen…
                   </>
+                ) : speakMode ? (
+                  'Auflösen — die anderen bewerten 🗣️'
                 ) : (
                   'Antwort bestätigen ✓'
                 )}
@@ -640,7 +958,7 @@ export default function GameScreen() {
         )}
 
         {/* Draw card button (only when no card is active) */}
-        {!currentCard && phase !== 'round_result' && (isMyTurn ? (
+        {!currentCard && phase !== 'round_result' && phase !== 'buzzer' && phase !== 'reveal_vote' && (isMyTurn ? (
           <button
             onClick={handleDrawCard}
             disabled={isLoading}
@@ -728,6 +1046,72 @@ function Pill({ color, children }: { color: 'purple' | 'green' | 'gold'; childre
     >
       {children}
     </span>
+  );
+}
+
+function TimerBar({ secondsLeft, totalSec, label }: { secondsLeft: number; totalSec: number; label: string }) {
+  const fraction = totalSec > 0 ? Math.max(0, Math.min(1, secondsLeft / totalSec)) : 0;
+  const urgent = secondsLeft <= 10;
+  const color = urgent ? '#ff4d6d' : secondsLeft <= totalSec / 2 ? '#ffd60a' : '#06d6a0';
+  return (
+    <div style={{ marginTop: 10 }} className={urgent ? 'timer-urgent' : undefined}>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4,
+      }}>
+        <span style={{ color: '#8b7fb8', fontSize: '0.72rem' }}>⏱️ {label}</span>
+        <span style={{
+          fontFamily: "'Bebas Neue', sans-serif", fontSize: '1.3rem', lineHeight: 1, color,
+        }}>
+          {secondsLeft}s
+        </span>
+      </div>
+      <div style={{ height: 6, borderRadius: 3, background: 'rgba(168,85,247,0.12)', overflow: 'hidden' }}>
+        <div style={{
+          height: '100%', borderRadius: 3,
+          width: `${fraction * 100}%`,
+          background: color,
+          boxShadow: `0 0 10px ${color}`,
+          transition: 'width 0.25s linear, background 0.3s',
+        }} />
+      </div>
+    </div>
+  );
+}
+
+function VoteToggle({ label, value, onChange }: {
+  label: string; value: boolean | null; onChange: (ok: boolean) => void;
+}) {
+  return (
+    <div style={{
+      display: 'grid', gap: 6, padding: '10px 12px', borderRadius: 10,
+      background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.15)',
+    }}>
+      <span style={{ color: '#8b7fb8', fontSize: '0.78rem', textAlign: 'center' }}>{label}</span>
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+        <button
+          onClick={() => onChange(true)}
+          style={{
+            flex: 1, padding: '8px 0', borderRadius: 8, cursor: 'pointer',
+            border: value === true ? '1px solid rgba(6,214,160,0.6)' : '1px solid rgba(168,85,247,0.2)',
+            background: value === true ? 'rgba(6,214,160,0.15)' : 'transparent',
+            color: value === true ? '#06d6a0' : '#8b7fb8', fontWeight: 700, fontSize: '0.85rem',
+          }}
+        >
+          ✓ Richtig
+        </button>
+        <button
+          onClick={() => onChange(false)}
+          style={{
+            flex: 1, padding: '8px 0', borderRadius: 8, cursor: 'pointer',
+            border: value === false ? '1px solid rgba(255,77,109,0.6)' : '1px solid rgba(168,85,247,0.2)',
+            background: value === false ? 'rgba(255,77,109,0.12)' : 'transparent',
+            color: value === false ? '#ff4d6d' : '#8b7fb8', fontWeight: 700, fontSize: '0.85rem',
+          }}
+        >
+          ✗ Falsch
+        </button>
+      </div>
+    </div>
   );
 }
 
