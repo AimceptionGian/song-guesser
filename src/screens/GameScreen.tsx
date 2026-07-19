@@ -771,67 +771,6 @@ export default function GameScreen() {
           </div>
         )}
 
-        {/* Current Song Card */}
-        {currentCard && phase === 'guessing' && (
-          <div
-            className="pop-in"
-            style={{
-              borderRadius: 20,
-              border: '1px solid rgba(168,85,247,0.3)',
-              background: 'linear-gradient(135deg, #1e1c2e 0%, #13121f 100%)',
-              overflow: 'hidden',
-            }}
-          >
-            <div
-              style={{
-                height: 'clamp(64px, 14vw, 84px)',
-                background: currentCard.gradient,
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
-                position: 'relative',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 'clamp(28px, 6vw, 36px)',
-              }}
-            >
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 8,
-                  left: 8,
-                  padding: '3px 8px',
-                  borderRadius: 8,
-                  background: 'rgba(247,37,133,0.7)',
-                  backdropFilter: 'blur(4px)',
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: '0.65rem',
-                  color: 'white',
-                  border: '1px solid rgba(255,255,255,0.15)',
-                }}
-              >
-                🎵 Aktuelle Karte
-              </div>
-              🎵
-            </div>
-            <div style={{ padding: 'clamp(8px, 2vw, 12px)', display: 'grid', gap: 2 }}>
-              <div
-                style={{
-                  fontFamily: "'Bebas Neue', sans-serif",
-                  fontSize: 'clamp(1.05rem, 3.5vw, 1.3rem)',
-                  letterSpacing: '0.02em',
-                  color: '#f0eeff',
-                }}
-              >
-                ??? — ???
-              </div>
-              <div style={{ color: '#8b7fb8', fontSize: 'clamp(0.7rem, 2vw, 0.78rem)' }}>
-                Erscheinungsjahr raten
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Timeline — spectators see the active player's live position */}
         <div style={isMyTurn ? undefined : { pointerEvents: 'none', opacity: 0.85 }}>
           <Timeline
