@@ -67,9 +67,11 @@ describe('deck-service', () => {
 
   describe('buildCuratedDecadeCards', () => {
     it('uses the hardcoded year, not whatever the provider returns', async () => {
+      // 1850 is a year no curated hit can legitimately have — a real hit
+      // year (like 2009) could coincide with the randomly picked song.
       vi.spyOn(catalogService, 'getProvider').mockReturnValue({
         name: 'deezer',
-        searchTracks: vi.fn().mockResolvedValue([makeCatalogTrack({ year: 2009, previewUrl: 'https://x/p.mp3' })]),
+        searchTracks: vi.fn().mockResolvedValue([makeCatalogTrack({ year: 1850, previewUrl: 'https://x/p.mp3' })]),
         getTrack: vi.fn(),
         getPreviewUrl: vi.fn(),
         getChartTracks: vi.fn(),
@@ -78,10 +80,10 @@ describe('deck-service', () => {
       const cards = await buildCuratedDecadeCards(1);
       expect(cards).toHaveLength(1);
       // The card's year must be one of our curated ground-truth years,
-      // never the mocked provider year (2009).
+      // never the mocked provider year.
       const allYears = DECADES.flatMap((d) => DECADE_HITS[d].map((h) => h.year));
       expect(allYears).toContain(cards[0].year);
-      expect(cards[0].year).not.toBe(2009);
+      expect(cards[0].year).not.toBe(1850);
     });
 
     it('drops candidates without a preview URL', async () => {
