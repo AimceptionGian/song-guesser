@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { sfx } from '../services/sfx';
 import type { Player } from '../types';
 
 interface FinalState {
@@ -9,6 +10,71 @@ interface FinalState {
 }
 
 const CONFETTI_COLORS = ['#d6f545', '#ff4fa3', '#45e3ff', '#ffd60a', '#8b5cf6'];
+
+interface RecapHighlight {
+  emoji: string;
+  title: string;
+  playerName: string;
+  detail: string;
+}
+
+/**
+ * Wrapped-Recap: kleine Auszeichnungen aus den platzierten Karten.
+ * Rein clientseitig berechnet — braucht keine Backend-Änderung.
+ */
+function computeHighlights(players: Player[]): RecapHighlight[] {
+  const stats = players.map((p) => {
+    const cards = (p.placedCards ?? []).filter((pc: any) => pc?.song?.year);
+    const hits = cards.filter((pc) => pc.isCorrect).length;
+    const diffs = cards.map((pc: any) => Math.abs(pc.placedYear - pc.song.year));
+    const avgDiff = diffs.length ? diffs.reduce((a, b) => a + b, 0) / diffs.length : Infinity;
+    let best: { title: string; diff: number } | null = null;
+    for (const pc of cards as any[]) {
+      const diff = Math.abs(pc.placedYear - pc.song.year);
+      if (!best || diff < best.diff) best = { title: pc.song.title, diff };
+    }
+    return { p, total: cards.length, hits, avgDiff, best };
+  }).filter((s) => s.total > 0);
+
+  if (stats.length === 0) return [];
+  const highlights: RecapHighlight[] = [];
+
+  const timelineBoss = [...stats].sort((a, b) => b.hits / b.total - a.hits / a.total)[0];
+  if (timelineBoss.hits > 0) {
+    highlights.push({
+      emoji: '🎼',
+      title: 'Timeline-Boss',
+      playerName: timelineBoss.p.name,
+      detail: `${timelineBoss.hits}/${timelineBoss.total} Karten richtig einsortiert`,
+    });
+  }
+
+  const finestEar = [...stats].sort((a, b) => a.avgDiff - b.avgDiff)[0];
+  if (finestEar.avgDiff !== Infinity) {
+    highlights.push({
+      emoji: '📏',
+      title: 'Feinstes Gehör',
+      playerName: finestEar.p.name,
+      detail: `im Schnitt nur ±${Math.round(finestEar.avgDiff)} Jahre daneben`,
+    });
+  }
+
+  const sniper = [...stats]
+    .filter((s) => s.best)
+    .sort((a, b) => a.best!.diff - b.best!.diff)[0];
+  if (sniper?.best) {
+    highlights.push({
+      emoji: '🎯',
+      title: sniper.best.diff === 0 ? 'Volltreffer' : 'Bester Schuss',
+      playerName: sniper.p.name,
+      detail: sniper.best.diff === 0
+        ? `„${sniper.best.title}" aufs Jahr genau!`
+        : `„${sniper.best.title}" nur ±${sniper.best.diff} Jahre daneben`,
+    });
+  }
+
+  return highlights;
+}
 
 export default function FinalScreen() {
   const location = useLocation();
@@ -28,8 +94,27 @@ export default function FinalScreen() {
     []
   );
 
+  const highlights = useMemo(
+    () => (state ? computeHighlights(state.players) : []),
+    [state]
+  );
+
+  // Direkter Aufruf ohne State (z.B. Reload auf /final): zurück zum Start.
+  // Navigation gehört in einen Effect, nicht in die Render-Phase.
+  useEffect(() => {
+    if (!state) navigate('/', { replace: true });
+  }, [state, navigate]);
+
+  // Sieger-Fanfare — einmal pro Finale
+  const fanfarePlayedRef = useRef(false);
+  useEffect(() => {
+    if (state && !fanfarePlayedRef.current) {
+      fanfarePlayedRef.current = true;
+      sfx.fanfare();
+    }
+  }, [state]);
+
   if (!state) {
-    navigate('/');
     return null;
   }
 
@@ -38,6 +123,7 @@ export default function FinalScreen() {
   const winner = sorted[0];
 
   const handlePlayAgain = () => {
+    sfx.click();
     navigate('/');
   };
 
@@ -174,6 +260,44 @@ export default function FinalScreen() {
           );
         })}
       </div>
+
+      {/* Wrapped-Recap: Auszeichnungen aus dem Spielverlauf */}
+      {highlights.length > 0 && (
+        <div style={{ width: '100%', maxWidth: 400, marginTop: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
+            <span className="display" style={{ fontSize: '0.85rem', color: 'var(--cyan)' }}>
+              Euer Recap
+            </span>
+            <span style={{ flex: 1, height: 1, background: 'var(--line)', alignSelf: 'center' }} />
+          </div>
+          {highlights.map((h, i) => (
+            <div
+              key={h.title}
+              className="fade-up panel"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '12px 14px',
+                marginBottom: 8,
+                animationDelay: `${0.5 + i * 0.15}s`,
+                transform: `rotate(${(i % 2 === 0 ? -1 : 1) * 0.5}deg)`,
+              }}
+            >
+              <span style={{ fontSize: 24, flexShrink: 0 }}>{h.emoji}</span>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                  <span className="display" style={{ fontSize: '0.72rem', color: 'var(--lime)', letterSpacing: '0.05em' }}>
+                    {h.title}
+                  </span>
+                  <span style={{ color: 'var(--ink)', fontWeight: 700, fontSize: '0.88rem' }}>{h.playerName}</span>
+                </div>
+                <div style={{ color: 'var(--muted)', fontSize: '0.78rem', marginTop: 2 }}>{h.detail}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Nochmal spielen */}
       <button

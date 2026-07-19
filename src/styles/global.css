@@ -573,6 +573,74 @@ html, body {
 .volume-slider:disabled::-webkit-slider-thumb { cursor: default; box-shadow: none; }
 .volume-slider:disabled::-moz-range-thumb { cursor: default; box-shadow: none; }
 
+/* ─── Track-Intro-Interstitial (beim Kartenziehen) ─── */
+
+.track-intro {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: rgba(11, 10, 18, 0.82);
+  backdrop-filter: blur(5px);
+  animation: introBackdrop 1.5s ease forwards;
+}
+@keyframes introBackdrop {
+  0% { opacity: 0; }
+  12% { opacity: 1; }
+  78% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.track-intro-title {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: clamp(3rem, 16vw, 7rem);
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  color: var(--lime);
+  text-shadow: 6px 6px 0 rgba(255, 79, 163, 0.55);
+  animation: introTitle 1.5s cubic-bezier(.2,.9,.3,1.15) forwards;
+}
+@keyframes introTitle {
+  0% { opacity: 0; transform: scale(2.4) rotate(5deg); }
+  20% { opacity: 1; transform: scale(1) rotate(-1.5deg); }
+  74% { opacity: 1; transform: scale(1.04) rotate(-1.5deg); }
+  100% { opacity: 0; transform: scale(1.1) rotate(-1.5deg); }
+}
+.track-intro-sub {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: clamp(1rem, 4vw, 1.4rem);
+  color: var(--muted);
+  text-align: center;
+  margin-top: 8px;
+  animation: introBackdrop 1.5s ease forwards;
+}
+
+/* ─── Icon-Button (Mute etc.) ─── */
+
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  transition: border-color 0.15s, color 0.15s, transform 0.12s;
+}
+.icon-btn:hover {
+  border-color: var(--lime);
+  color: var(--lime);
+}
+.icon-btn:active { transform: scale(0.9); }
+
 /* ─── Konfetti (Finale) ─── */
 
 @keyframes confettiFall {

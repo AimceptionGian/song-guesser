@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Scoreboard from '../components/Scoreboard';
 import { api, getLobbySession } from '../services/api-client';
@@ -27,8 +27,15 @@ export default function ResultScreen() {
   const navigate = useNavigate();
   const state = location.state as ResultState | null;
 
+  const [resolving, setResolving] = useState(false);
+
+  // Direkter Aufruf ohne State (z.B. Reload auf /result): zurück zum Start.
+  // Navigation gehört in einen Effect, nicht in die Render-Phase.
+  useEffect(() => {
+    if (!state) navigate('/', { replace: true });
+  }, [state, navigate]);
+
   if (!state) {
-    navigate('/');
     return null;
   }
 
@@ -53,7 +60,6 @@ export default function ResultScreen() {
   const isLastRound = round >= totalRounds;
   const isLastPlayer = currentPlayerIndex >= players.length - 1;
   const isGameOver = isLastRound && isLastPlayer;
-  const [resolving, setResolving] = useState(false);
 
   const handleContinue = async () => {
     if (resolving) return;

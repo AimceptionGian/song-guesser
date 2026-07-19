@@ -6,6 +6,7 @@ import AudioPlayer from '../components/AudioPlayer';
 import Scoreboard from '../components/Scoreboard';
 import { MIN_YEAR, MAX_YEAR } from '../constants';
 import { api, getLobbySession, clearLobbySession } from '../services/api-client';
+import { sfx, isSfxMuted, setSfxMuted } from '../services/sfx';
 import type { Song, Player, LiveInput, PlaybackState, RoundReveal, MatchSettings, BuzzerState, VoteState } from '../types';
 
 /** Backend players carry {card}; the frontend expects {song}. */
@@ -51,6 +52,9 @@ export default function GameScreen() {
   const [buzzerGuess, setBuzzerGuess] = useState('');
   const [myVote, setMyVote] = useState<{ artistOk: boolean; titleOk: boolean } | null>(null);
   const [voteSent, setVoteSent] = useState(false);
+  const [sfxMuted, setSfxMutedState] = useState(isSfxMuted);
+  // Track-Intro-Overlay: Nummer des Tracks, der gerade eingeblendet wird
+  const [introRound, setIntroRound] = useState<number | null>(null);
 
   const currentPlayer = players[currentPlayerIndex] || players[0];
   const speakMode = settings?.guessMode === 'speak';
@@ -157,7 +161,6 @@ export default function GameScreen() {
   }, []);
 
   // ─── Poll game state so spectators follow the active player live ───
-  const finishedNavRef = useRef(false);
   useEffect(() => {
     if (!gameCode) return;
     const id = setInterval(async () => {
@@ -169,25 +172,26 @@ export default function GameScreen() {
           setGameStarted(true);
           setLiveInput(stateAny.liveInput ?? null);
           setPlayback(stateAny.playback ?? null);
-          // Spectators: follow everyone to the final screen when it's over
-          if (stateAny.phase === 'finished' && !finishedNavRef.current) {
-            finishedNavRef.current = true;
-            navigate('/final', {
-              state: {
-                players: convertPlayers(stateAny),
-                round: stateAny.currentRound,
-                totalRounds: stateAny.totalRounds,
-                gameCode,
-              },
-            });
-          }
         }
       } catch {
         // Match not started yet — keep waiting
       }
     }, 1500);
     return () => clearInterval(id);
-  }, [gameCode, syncState, navigate]);
+  }, [gameCode, syncState]);
+
+  // ─── Game over: everyone moves to the final screen immediately ───
+  // Watching the synced phase covers both paths — the resolver's own
+  // command response and the spectators' poll — so nobody sits on a dead
+  // "Karte ziehen" button after the last reveal.
+  const finishedNavRef = useRef(false);
+  useEffect(() => {
+    if (phase !== 'finished' || finishedNavRef.current || players.length === 0) return;
+    finishedNavRef.current = true;
+    navigate('/final', {
+      state: { players, round, totalRounds, gameCode },
+    });
+  }, [phase, players, round, totalRounds, gameCode, navigate]);
 
   // ─── Broadcast own inputs while it's our turn (debounced) ───
   useEffect(() => {
@@ -241,6 +245,63 @@ export default function GameScreen() {
     }
   }, [phase, currentPlayerIndex, round]);
 
+  // ─── Sound + Track-Intro bei Phasenwechseln ───
+  const prevPhaseRef = useRef<string>('drawing');
+  // Ausblend-Timer als Ref: Er darf NICHT im Effect-Cleanup gecancelt werden,
+  // sonst bleibt das Overlay hängen, wenn die Phase innerhalb der 1,5s wechselt
+  // (z.B. bei sehr schneller Antwort).
+  const introTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = phase;
+    if (prev === phase) return;
+
+    if (phase === 'guessing') {
+      // Neue Karte liegt auf dem Tisch: Intro einblenden + Vinyl-Anlauf
+      sfx.draw();
+      setIntroRound(round);
+      if (introTimerRef.current) clearTimeout(introTimerRef.current);
+      introTimerRef.current = setTimeout(() => setIntroRound(null), 1500);
+    }
+    if (phase === 'round_result' && roundResult) sfx.reveal(roundResult.points);
+    if (phase === 'reveal_vote') sfx.click();
+    if (phase === 'buzzer') sfx.buzzerOpen();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  // Intro-Timer nur beim Unmount aufräumen
+  useEffect(() => () => {
+    if (introTimerRef.current) clearTimeout(introTimerRef.current);
+  }, []);
+
+  // Jemand hat den Buzzer gewonnen
+  const prevBuzzWinnerRef = useRef<string | null>(null);
+  useEffect(() => {
+    const winner = buzzer?.winnerId ?? null;
+    if (winner && winner !== prevBuzzWinnerRef.current) sfx.buzz();
+    prevBuzzWinnerRef.current = winner;
+  }, [buzzer?.winnerId]);
+
+  // Countdown-Ticks in den letzten 5 Sekunden
+  const lastTickRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (secondsLeft === null || secondsLeft > 5 || secondsLeft <= 0) {
+      lastTickRef.current = null;
+      return;
+    }
+    if (lastTickRef.current !== secondsLeft) {
+      lastTickRef.current = secondsLeft;
+      sfx.tick(secondsLeft);
+    }
+  }, [secondsLeft]);
+
+  const handleToggleSfx = useCallback(() => {
+    const next = !isSfxMuted();
+    setSfxMuted(next);
+    setSfxMutedState(next);
+    if (!next) sfx.click(); // hörbares Feedback beim Einschalten
+  }, []);
+
   // ─── Leave game ───
   const handleLeaveGame = useCallback(() => {
     const ok = window.confirm(
@@ -254,6 +315,7 @@ export default function GameScreen() {
   // ─── Draw card ───
   const handleDrawCard = useCallback(async () => {
     if (round > totalRounds || isLoading || !gameCode) return;
+    sfx.click();
     setIsLoading(true);
     setError(null);
 
@@ -285,6 +347,7 @@ export default function GameScreen() {
   // ─── Submit guess ───
   const handleSubmit = useCallback(async () => {
     if (!currentCard || !gameCode) return;
+    sfx.click();
     setIsLoading(true);
     setError(null);
 
@@ -432,6 +495,20 @@ export default function GameScreen() {
         zIndex: 1,
       }}
     >
+      {/* ─── Track-Intro: kurzer Vollbild-Moment beim Kartenziehen ─── */}
+      {introRound !== null && (
+        <div className="track-intro" aria-hidden>
+          <div style={{ textAlign: 'center' }}>
+            <div className="track-intro-title">
+              Track {String(Math.min(introRound, totalRounds)).padStart(2, '0')}
+            </div>
+            <div className="track-intro-sub">
+              {isMyTurn ? 'gut zuhören …' : `${activePlayerName} ist dran …`}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── Game HUD: Fortschritt, Zug, Timer, Verlassen ─── */}
       <div className="game-hud" style={{ width: '100%', maxWidth: 720, marginBottom: 14 }}>
         <div
@@ -441,7 +518,7 @@ export default function GameScreen() {
           }}
         >
           <span className="display" style={{ fontSize: '0.9rem', letterSpacing: '0.04em' }}>
-            Track <span style={{ color: 'var(--lime)' }}>{String(round).padStart(2, '0')}</span>
+            Track <span style={{ color: 'var(--lime)' }}>{String(Math.min(round, totalRounds)).padStart(2, '0')}</span>
             <span style={{ color: 'var(--dim)' }}>/{String(totalRounds).padStart(2, '0')}</span>
           </span>
           <span
@@ -453,14 +530,24 @@ export default function GameScreen() {
           >
             {isMyTurn ? '▶ Du bist am Zug!' : `👀 ${currentPlayer?.avatar ?? ''} ${activePlayerName} ist am Zug`}
           </span>
-          <button
-            onClick={handleLeaveGame}
-            title="Spiel verlassen"
-            className="btn-ghost danger"
-            style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-          >
-            ✕
-          </button>
+          <span style={{ display: 'flex', gap: 6 }}>
+            <button
+              onClick={handleToggleSfx}
+              title={sfxMuted ? 'Sound an' : 'Sound aus'}
+              aria-label={sfxMuted ? 'Sound einschalten' : 'Sound ausschalten'}
+              className="icon-btn"
+            >
+              {sfxMuted ? '🔇' : '🔔'}
+            </button>
+            <button
+              onClick={handleLeaveGame}
+              title="Spiel verlassen"
+              className="btn-ghost danger"
+              style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+            >
+              ✕
+            </button>
+          </span>
         </div>
 
         {/* Runden-Fortschritt als Segmente */}
@@ -712,6 +799,7 @@ export default function GameScreen() {
             {roundResult.playerId === selfId ? (
               <button
                 onClick={async () => {
+                  sfx.click();
                   try {
                     const res = await api.resolveTurn(gameCode!, selfId ?? undefined);
                     if (res.state) syncState(res.state);
@@ -829,8 +917,8 @@ export default function GameScreen() {
           </div>
         )}
 
-        {/* Karte-ziehen-Button (nur wenn keine Karte aktiv ist) */}
-        {!currentCard && phase !== 'round_result' && phase !== 'buzzer' && phase !== 'reveal_vote' && (isMyTurn ? (
+        {/* Karte-ziehen-Button (nur wenn keine Karte aktiv ist und das Spiel läuft) */}
+        {!currentCard && phase !== 'round_result' && phase !== 'buzzer' && phase !== 'reveal_vote' && phase !== 'finished' && round <= totalRounds && (isMyTurn ? (
           <button
             onClick={handleDrawCard}
             disabled={isLoading}

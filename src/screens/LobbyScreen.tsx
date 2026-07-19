@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { sfx } from '../services/sfx';
 import {
   api,
   saveLobbySession,
@@ -40,6 +41,15 @@ export default function LobbyScreen() {
   const [playerId, setPlayerId] = useState('');
   const [isHost, setIsHost] = useState(false);
   const [lobbyPlayers, setLobbyPlayers] = useState<Array<{ id: string; name: string; avatar: string }>>([]);
+
+  // Kleiner Pop-Sound, wenn jemand Neues die Lobby betritt
+  const prevPlayerCountRef = useRef(0);
+  useEffect(() => {
+    if (lobbyPlayers.length > prevPlayerCountRef.current && prevPlayerCountRef.current > 0) {
+      sfx.join();
+    }
+    prevPlayerCountRef.current = lobbyPlayers.length;
+  }, [lobbyPlayers.length]);
   const [lobbySettings, setLobbySettings] = useState<{
     totalRounds: number;
     maxPoints: number;
@@ -68,7 +78,7 @@ export default function LobbyScreen() {
   // Poll lobby players + category state
   const startPolling = useCallback((code: string) => {
     if (pollingRef.current) clearInterval(pollingRef.current);
-    pollingRef.current = setInterval(async () => {
+    const syncLobby = async () => {
       try {
         const lobby = await api.getLobby(code);
         setLobbyPlayers(lobby.players);
@@ -91,7 +101,11 @@ export default function LobbyScreen() {
       } catch {
         // Lobby might be gone
       }
-    }, 2000);
+    };
+    // Sofort einmal laden — sonst sind die Regler in den ersten 2 Sekunden
+    // stumm (lobbySettings ist bis zum ersten Poll-Tick null).
+    void syncLobby();
+    pollingRef.current = setInterval(syncLobby, 2000);
   }, [navigate]);
 
   // Load category definitions + Spotify client ID once we're in a lobby
@@ -420,7 +434,7 @@ export default function LobbyScreen() {
               className="sticker pink tilt-r"
               style={{ position: 'absolute', top: -12, right: -28 }}
             >
-              {lobbyPlayers.length} {lobbyPlayers.length === 1 ? 'Spieler' : 'Spieler'}
+              {lobbyPlayers.length === 1 ? '1 Spieler' : `${lobbyPlayers.length} Spieler`}
             </span>
           </h1>
           <p className="serif-note" style={{ color: 'var(--muted)', fontSize: '1.05rem', marginTop: 6 }}>
