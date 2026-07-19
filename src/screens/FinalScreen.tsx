@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { Player } from '../types';
 
@@ -7,10 +8,25 @@ interface FinalState {
   totalRounds: number;
 }
 
+const CONFETTI_COLORS = ['#d6f545', '#ff4fa3', '#45e3ff', '#ffd60a', '#8b5cf6'];
+
 export default function FinalScreen() {
   const location = useLocation();
   const navigate = useNavigate();
   const state = location.state as FinalState | null;
+
+  // Deterministisch pro Mount, damit das Konfetti nicht bei jedem Render springt
+  const confetti = useMemo(
+    () =>
+      Array.from({ length: 40 }, (_, i) => ({
+        left: (i * 37 + 13) % 100,
+        delay: ((i * 53) % 70) / 10,
+        duration: 4.5 + ((i * 29) % 40) / 10,
+        color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+        rotate: (i * 47) % 360,
+      })),
+    []
+  );
 
   if (!state) {
     navigate('/');
@@ -32,52 +48,63 @@ export default function FinalScreen() {
         flexDirection: 'column',
         alignItems: 'center',
         minHeight: '100vh',
-        padding: '24px 16px 40px',
+        padding: '24px 16px 44px',
         gap: 0,
         justifyContent: 'center',
         position: 'relative',
         zIndex: 1,
+        overflow: 'hidden',
       }}
     >
-      {/* Winner announcement */}
-      <div className="pop-in" style={{ textAlign: 'center', marginBottom: 'clamp(16px, 4vw, 24px)' }}>
-        <div style={{ fontSize: 'clamp(48px, 12vw, 64px)', display: 'block', marginBottom: 8 }}>🏆</div>
-        <div
+      {/* Konfetti */}
+      {confetti.map((c, i) => (
+        <span
+          key={i}
+          className="confetti-piece"
           style={{
-            fontFamily: "'Bebas Neue', sans-serif",
-            fontSize: 'clamp(2rem, 8vw, 3rem)',
-            color: '#ffd60a',
-            textShadow: '0 0 40px rgba(255,214,10,0.6)',
+            left: `${c.left}%`,
+            background: c.color,
+            animationDelay: `${c.delay}s`,
+            animationDuration: `${c.duration}s`,
+            transform: `rotate(${c.rotate}deg)`,
           }}
+        />
+      ))}
+
+      {/* Sieger-Moment */}
+      <div className="slam-in" style={{ textAlign: 'center', marginBottom: 'clamp(20px, 5vw, 32px)', position: 'relative' }}>
+        <div style={{ fontSize: 'clamp(50px, 13vw, 72px)', marginBottom: 4 }}>🏆</div>
+        <div
+          className="heading-xl outline-text"
+          style={{ WebkitTextStroke: '2px var(--gold)' }}
         >
-          GEWINNER
+          Gewinner
         </div>
         <div
+          className="display"
           style={{
-            fontFamily: "'Bebas Neue', sans-serif",
-            fontSize: 'clamp(1.4rem, 6vw, 2rem)',
-            color: '#f0eeff',
-            marginTop: 8,
+            fontSize: 'clamp(1.6rem, 7vw, 2.4rem)',
+            color: 'var(--ink)',
+            marginTop: 10,
+            textShadow: '4px 4px 0 rgba(255,79,163,0.45)',
           }}
         >
           {winner?.avatar} {winner?.name}
         </div>
-        <div
-          style={{
-            fontFamily: "'Bebas Neue', sans-serif",
-            fontSize: 'clamp(1.1rem, 4vw, 1.5rem)',
-            color: '#a855f7',
-            marginTop: 4,
-          }}
-        >
-          {winner?.score} Punkte
+        <div className="serif-note" style={{ fontSize: 'clamp(1.1rem, 4vw, 1.4rem)', color: 'var(--lime)', marginTop: 6 }}>
+          {winner?.score} Punkte — was für ein Ohr!
         </div>
       </div>
 
-      {/* Ranking */}
+      {/* Endstand als Charts */}
       <div style={{ width: '100%', maxWidth: 400 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
+          <span className="display" style={{ fontSize: '0.85rem', color: 'var(--pink)' }}>
+            Endstand
+          </span>
+          <span style={{ flex: 1, height: 1, background: 'var(--line)', alignSelf: 'center' }} />
+        </div>
         {sorted.map((p, i) => {
-          const medals = ['🥇', '🥈', '🥉'];
           const isGold = i === 0;
           return (
             <div
@@ -87,36 +114,38 @@ export default function FinalScreen() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: 'clamp(8px, 2.5vw, 12px)',
-                padding: 'clamp(10px, 3vw, 16px)',
-                borderRadius: 12,
+                padding: 'clamp(11px, 3vw, 16px)',
+                borderRadius: 16,
                 marginBottom: 8,
                 background: isGold
-                  ? 'rgba(255,214,10,0.1)'
-                  : '#13121f',
+                  ? 'linear-gradient(140deg, rgba(255,214,10,0.12), var(--bg-2) 70%)'
+                  : 'var(--bg-2)',
                 border: isGold
-                  ? '1px solid rgba(255,214,10,0.3)'
-                  : '1px solid rgba(168,85,247,0.15)',
-                animationDelay: `${i * 0.1}s`,
+                  ? '1px solid rgba(255,214,10,0.4)'
+                  : '1px solid var(--line)',
+                transform: isGold ? 'rotate(-0.6deg)' : 'none',
+                animationDelay: `${i * 0.12}s`,
               }}
             >
               <span
+                className="display"
                 style={{
-                  fontFamily: "'Bebas Neue', sans-serif",
                   fontSize: 'clamp(1.2rem, 4vw, 1.5rem)',
-                  width: 28,
+                  width: 36,
                   textAlign: 'center',
                   flexShrink: 0,
-                  color: isGold ? '#ffd60a' : i === 1 ? '#c0c0c0' : '#8b7fb8',
+                  color: isGold ? 'var(--gold)' : i === 1 ? 'var(--muted)' : 'var(--dim)',
                 }}
               >
-                {medals[i] || `#${i + 1}`}
+                {String(i + 1).padStart(2, '0')}
               </span>
               <div
                 style={{
-                  width: 'clamp(28px, 7vw, 36px)',
-                  height: 'clamp(28px, 7vw, 36px)',
+                  width: 'clamp(30px, 7vw, 38px)',
+                  height: 'clamp(30px, 7vw, 38px)',
                   borderRadius: '50%',
-                  background: 'rgba(168,85,247,0.2)',
+                  background: isGold ? 'rgba(255,214,10,0.16)' : 'rgba(139,92,246,0.18)',
+                  border: '1px solid var(--line)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -126,13 +155,17 @@ export default function FinalScreen() {
               >
                 {p.avatar}
               </div>
-              <span style={{ flex: 1, color: '#f0eeff', fontWeight: 600, fontSize: 'clamp(0.85rem, 2.5vw, 1rem)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+              <span style={{ flex: 1, color: 'var(--ink)', fontWeight: 600, fontSize: 'clamp(0.88rem, 2.5vw, 1rem)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {p.name}
+                {isGold && <span style={{ marginLeft: 6 }}>👑</span>}
+              </span>
               <span
+                className="display"
                 style={{
-                  fontFamily: "'Bebas Neue', sans-serif",
-                  fontSize: 'clamp(1.1rem, 3.5vw, 1.4rem)',
-                  color: '#a855f7',
+                  fontSize: 'clamp(1.15rem, 3.5vw, 1.45rem)',
+                  color: isGold ? 'var(--gold)' : 'var(--ink)',
                   flexShrink: 0,
+                  fontVariantNumeric: 'tabular-nums',
                 }}
               >
                 {p.score}
@@ -142,30 +175,11 @@ export default function FinalScreen() {
         })}
       </div>
 
-      {/* Play Again */}
+      {/* Nochmal spielen */}
       <button
         onClick={handlePlayAgain}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '14px 28px',
-          borderRadius: 12,
-          background: 'rgba(168,85,247,0.12)',
-          border: '1px solid rgba(168,85,247,0.28)',
-          color: '#c4b8ff',
-          cursor: 'pointer',
-          fontWeight: 600,
-          fontSize: '0.95rem',
-          marginTop: 12,
-          transition: 'background 0.2s',
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = 'rgba(168,85,247,0.22)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = 'rgba(168,85,247,0.12)';
-        }}
+        className="btn-primary fade-up"
+        style={{ width: 'auto', marginTop: 20, animationDelay: '0.4s' }}
       >
         ↺ Nochmal spielen
       </button>

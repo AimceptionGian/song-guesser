@@ -6,87 +6,97 @@ interface ScoreboardProps {
   totalRounds: number;
 }
 
+/** Rangliste im "Charts"-Look: grosse Platznummern, Leader hervorgehoben. */
 export default function Scoreboard({ players, currentRound, totalRounds }: ScoreboardProps) {
   const sorted = [...players].sort((a, b) => b.score - a.score);
 
   return (
-    <div
-      style={{
-        borderRadius: 16,
-        padding: 16,
-        background: '#13121f',
-        border: '1px solid rgba(168,85,247,0.2)',
-      }}
-    >
+    <div className="panel" style={{ padding: '16px 16px 10px' }}>
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'baseline',
           justifyContent: 'space-between',
           marginBottom: 12,
+          gap: 8,
         }}
       >
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#f0eeff', fontWeight: 600, fontSize: '0.9rem' }}>
-          🏆 Rangliste
+        <span className="display" style={{ fontSize: '0.95rem', letterSpacing: '0.04em' }}>
+          Charts
         </span>
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#8b7fb8', fontSize: '0.78rem' }}>
-          Runde {currentRound}/{totalRounds}
-        </span>
+        <span className="mono-label">Runde {currentRound}/{totalRounds}</span>
       </div>
-      {sorted.map((p, i) => (
-        <div
-          key={p.id}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '10px 12px',
-            borderRadius: 10,
-            marginBottom: 6,
-            background: i === 0 ? 'rgba(255,214,10,0.08)' : 'rgba(168,85,247,0.05)',
-            border: i === 0 ? '1px solid rgba(255,214,10,0.2)' : '1px solid transparent',
-          }}
-        >
-          <span
-            style={{
-              width: 20,
-              textAlign: 'center',
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: '0.78rem',
-              color: i === 0 ? '#ffd60a' : '#8b7fb8',
-              fontWeight: 600,
-            }}
-          >
-            {i + 1}
-          </span>
+      {sorted.map((p, i) => {
+        const leader = i === 0 && p.score > 0;
+        return (
           <div
+            key={p.id}
             style={{
-              width: 32,
-              height: 32,
-              borderRadius: '50%',
-              background: 'rgba(168,85,247,0.2)',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 16,
+              gap: 12,
+              padding: '9px 12px',
+              borderRadius: 12,
+              marginBottom: 6,
+              background: leader ? 'rgba(214,245,69,0.07)' : 'transparent',
+              border: leader ? '1px solid rgba(214,245,69,0.25)' : '1px solid transparent',
             }}
           >
-            {p.avatar}
+            <span
+              className="display"
+              style={{
+                width: 30,
+                textAlign: 'center',
+                fontSize: '1.1rem',
+                color: leader ? 'var(--lime)' : 'var(--dim)',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {String(i + 1).padStart(2, '0')}
+            </span>
+            <div
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: '50%',
+                background: leader ? 'rgba(214,245,69,0.15)' : 'rgba(139,92,246,0.18)',
+                border: '1px solid var(--line)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 16,
+                flexShrink: 0,
+              }}
+            >
+              {p.avatar}
+            </div>
+            <span
+              style={{
+                flex: 1,
+                color: 'var(--ink)',
+                fontWeight: 600,
+                fontSize: '0.92rem',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {p.name}
+              {leader && <span style={{ marginLeft: 6 }}>👑</span>}
+            </span>
+            <span
+              className="display"
+              style={{
+                fontSize: '1.25rem',
+                color: leader ? 'var(--lime)' : 'var(--ink)',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {p.score}
+            </span>
           </div>
-          <span style={{ flex: 1, color: '#f0eeff', fontWeight: 500, fontSize: '0.9rem' }}>
-            {p.name}
-          </span>
-          <span
-            style={{
-              fontFamily: "'Bebas Neue', sans-serif",
-              fontSize: '1.25rem',
-              color: '#a855f7',
-            }}
-          >
-            {p.score}
-          </span>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

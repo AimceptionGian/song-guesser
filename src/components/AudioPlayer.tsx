@@ -80,6 +80,12 @@ function loadStoredVolume(): number {
   }
 }
 
+// Deterministische Pseudo-Waveform (gleiche Optik für alle Spieler)
+const WAVE_BARS = Array.from({ length: 30 }, (_, i) => {
+  const h = 0.3 + 0.7 * Math.abs(Math.sin(i * 2.3) * Math.cos(i * 0.7));
+  return Math.round(h * 100) / 100;
+});
+
 export default function AudioPlayer({
   previewUrl,
   songTitle,
@@ -225,52 +231,33 @@ export default function AudioPlayer({
 
   const displayDuration = duration > 0 ? duration : 30;
   const displayCurrent = currentTime > 0 ? currentTime : 0;
+  const canInteract = !noAudio && (isController || needsGesture);
 
   return (
     <div
+      className="panel-inset"
       title={songTitle && artistName ? `${artistName} – ${songTitle}` : undefined}
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 10,
+        gap: 12,
         padding: '10px 14px',
-        borderRadius: 12,
-        background: 'rgba(168,85,247,0.06)',
-        border: '1px solid rgba(168,85,247,0.15)',
         opacity: noAudio ? 0.5 : 1,
       }}
     >
+      {/* Vinyl = Play/Pause */}
       <button
         onClick={togglePlay}
         disabled={noAudio || (!isController && !needsGesture)}
+        aria-label={isPlaying ? 'Pause' : 'Abspielen'}
         style={{
-          width: 40,
-          height: 40,
-          borderRadius: '50%',
           border: 'none',
-          cursor: noAudio || (!isController && !needsGesture) ? 'default' : 'pointer',
-          background: isPlaying
-            ? 'linear-gradient(135deg, #a855f7, #f72585)'
-            : 'linear-gradient(135deg, #7c3aed, #a855f7)',
-          boxShadow: needsGesture
-            ? '0 0 24px rgba(255,214,10,0.7)'
-            : isPlaying
-              ? '0 0 24px rgba(247,37,133,0.5)'
-              : '0 0 16px rgba(168,85,247,0.4)',
-          opacity: !isController && !needsGesture && !isPlaying ? 0.55 : 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          transition: 'transform 0.15s, box-shadow 0.15s',
+          background: 'none',
+          padding: 0,
+          cursor: canInteract ? 'pointer' : 'default',
           flexShrink: 0,
-        }}
-        onMouseEnter={(e) => {
-          if (!noAudio && (isController || needsGesture)) {
-            e.currentTarget.style.transform = 'scale(1.08)';
-          }
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'scale(1)';
+          borderRadius: '50%',
+          outlineOffset: 3,
         }}
         title={
           noAudio
@@ -284,29 +271,63 @@ export default function AudioPlayer({
                 : 'Vorschau abspielen'
         }
       >
-        {noAudio ? (
-          <svg viewBox="0 0 24 24" style={{ width: 18, height: 18, fill: 'white' }}>
-            <path d="M11 15h2v2h-2zm0-8h2v6h-2zm.99-5C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z" />
-          </svg>
-        ) : isPlaying ? (
-          <svg viewBox="0 0 24 24" style={{ width: 18, height: 18, fill: 'white' }}>
-            <rect x="6" y="4" width="4" height="16" />
-            <rect x="14" y="4" width="4" height="16" />
-          </svg>
-        ) : (
-          <svg viewBox="0 0 24 24" style={{ width: 18, height: 18, fill: 'white' }}>
-            <polygon points="5 3 19 12 5 21 5 3" />
-          </svg>
-        )}
+        <span
+          className={`vinyl${isPlaying ? ' spinning' : ''}`}
+          style={{
+            width: 52,
+            height: 52,
+            display: 'grid',
+            placeItems: 'center',
+            boxShadow: needsGesture
+              ? '0 0 22px rgba(255, 214, 10, 0.7)'
+              : isPlaying
+                ? '0 0 22px rgba(214, 245, 69, 0.45)'
+                : '0 0 12px rgba(0, 0, 0, 0.5)',
+            transition: 'box-shadow 0.2s',
+          }}
+        >
+          <span
+            style={{
+              width: 22,
+              height: 22,
+              borderRadius: '50%',
+              background: isPlaying ? 'var(--lime)' : 'var(--pink)',
+              display: 'grid',
+              placeItems: 'center',
+              zIndex: 1,
+              transition: 'background 0.2s',
+            }}
+          >
+            {noAudio ? (
+              <svg viewBox="0 0 24 24" style={{ width: 12, height: 12, fill: '#0b0a12' }}>
+                <path d="M11 15h2v2h-2zm0-8h2v6h-2zm.99-5C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z" />
+              </svg>
+            ) : isPlaying ? (
+              <svg viewBox="0 0 24 24" style={{ width: 10, height: 10, fill: '#0b0a12' }}>
+                <rect x="6" y="4" width="4" height="16" />
+                <rect x="14" y="4" width="4" height="16" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" style={{ width: 10, height: 10, fill: '#0b0a12' }}>
+                <polygon points="6 3 21 12 6 21 6 3" />
+              </svg>
+            )}
+          </span>
+        </span>
       </button>
 
+      {/* Waveform-Fortschritt (klicken = spulen) */}
       <div
+        role="progressbar"
+        aria-valuenow={Math.round(progress)}
+        aria-valuemin={0}
+        aria-valuemax={100}
         style={{
           flex: 1,
-          height: 5,
-          borderRadius: 3,
-          background: 'rgba(168,85,247,0.15)',
-          overflow: 'hidden',
+          height: 30,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 2,
           cursor: noAudio || !isController ? 'default' : 'pointer',
         }}
         onClick={(e) => {
@@ -318,27 +339,33 @@ export default function AudioPlayer({
           onTransport?.(isPlaying, newPos);
         }}
       >
-        <span
-          style={{
-            display: 'block',
-            height: '100%',
-            width: `${progress}%`,
-            background: isPlaying
-              ? 'linear-gradient(90deg, #a855f7, #f72585)'
-              : 'linear-gradient(90deg, #7c3aed, #a855f7)',
-            borderRadius: 3,
-            transition: 'width 0.25s linear',
-          }}
-        />
+        {WAVE_BARS.map((h, i) => {
+          const filled = (i / WAVE_BARS.length) * 100 < progress;
+          return (
+            <span
+              key={i}
+              style={{
+                flex: 1,
+                height: `${h * 100}%`,
+                minWidth: 2,
+                borderRadius: 2,
+                background: filled
+                  ? (isPlaying ? 'var(--lime)' : 'var(--pink)')
+                  : 'rgba(244, 241, 255, 0.14)',
+                transition: 'background 0.2s',
+              }}
+            />
+          );
+        })}
       </div>
 
       <span
         style={{
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: '0.75rem',
-          color: '#8b7fb8',
+          fontFamily: 'var(--font-mono)',
+          fontSize: '0.72rem',
+          color: 'var(--muted)',
           whiteSpace: 'nowrap',
-          minWidth: 60,
+          minWidth: 62,
           textAlign: 'right',
         }}
       >
@@ -374,7 +401,7 @@ export default function AudioPlayer({
           title={`Lautstärke: ${Math.round(volume * 100)}%`}
           style={{
             width: 74,
-            background: `linear-gradient(90deg, #7c3aed 0%, #a855f7 ${volume * 100}%, rgba(168,85,247,0.15) ${volume * 100}%)`,
+            background: `linear-gradient(90deg, var(--lime) 0%, var(--lime) ${volume * 100}%, rgba(214,245,69,0.15) ${volume * 100}%)`,
             cursor: noAudio ? 'default' : 'pointer',
           }}
         />

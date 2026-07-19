@@ -74,7 +74,7 @@ export default function ResultScreen() {
   };
 
   const yearDiffLabel = yearDiff === 0 ? 'Exakt!' : yearDiff <= 3 ? 'Sehr nah!' : yearDiff <= 10 ? 'Nah dran' : 'Daneben';
-  const yearDiffClass = yearDiff === 0 ? '#06d6a0' : yearDiff <= 3 ? '#ffd60a' : '#ff4d6d';
+  const yearDiffColor = yearDiff === 0 ? 'var(--green)' : yearDiff <= 3 ? 'var(--gold)' : 'var(--red)';
 
   return (
     <div
@@ -83,94 +83,68 @@ export default function ResultScreen() {
         flexDirection: 'column',
         alignItems: 'center',
         minHeight: '100vh',
-        padding: '24px 16px 40px',
+        padding: '24px 16px 44px',
         gap: 0,
         position: 'relative',
         zIndex: 1,
       }}
     >
       <div style={{ width: '100%', maxWidth: 480 }}>
-        {/* Top bar */}
+        {/* Kopfzeile */}
         <div
           style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             width: '100%',
-            maxWidth: 480,
-            marginBottom: 16,
+            marginBottom: 18,
             gap: 8,
             flexWrap: 'wrap',
           }}
         >
-          <span
-            style={{
-              padding: '6px 12px',
-              borderRadius: 8,
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: '0.78rem',
-              background: 'rgba(168,85,247,0.12)',
-              border: '1px solid rgba(168,85,247,0.25)',
-              color: '#a855f7',
-            }}
-          >
-            Karte {round} / {totalRounds}
+          <span className="display" style={{ fontSize: '0.9rem' }}>
+            Track <span style={{ color: 'var(--lime)' }}>{String(round).padStart(2, '0')}</span>
+            <span style={{ color: 'var(--dim)' }}>/{String(totalRounds).padStart(2, '0')}</span>
           </span>
-          <span
-            style={{
-              padding: '6px 12px',
-              borderRadius: 8,
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: '0.78rem',
-              background: 'rgba(6,214,160,0.1)',
-              border: '1px solid rgba(6,214,160,0.2)',
-              color: '#06d6a0',
-            }}
-          >
-            Auswertung
-          </span>
+          <span className="sticker cyan tilt-r">Auswertung</span>
         </div>
 
-        {/* Result card */}
+        {/* Der grosse Wrapped-Moment: die Punktzahl */}
+        <div className="slam-in" style={{ textAlign: 'center', margin: '10px 0 22px' }}>
+          <div
+            className="display"
+            style={{
+              fontSize: 'clamp(4.5rem, 24vw, 8rem)',
+              lineHeight: 0.9,
+              color: points > 0 ? 'var(--lime)' : 'var(--red)',
+              textShadow: points > 0
+                ? '6px 6px 0 rgba(255,79,163,0.5)'
+                : '6px 6px 0 rgba(139,92,246,0.4)',
+            }}
+          >
+            {points > 0 ? `+${points}` : '0'}
+          </div>
+          <div className="serif-note" style={{ color: 'var(--muted)', fontSize: '1.15rem', marginTop: 6 }}>
+            {points >= 4 ? 'Perfekte Runde — alles richtig!' : points > 0 ? 'Punkte für dich' : 'diesmal leider nichts …'}
+          </div>
+        </div>
+
+        {/* Ergebnis-Panel */}
         <div
-          className="pop-in"
+          className="pop-in panel"
           style={{
-            borderRadius: 16,
             padding: 20,
-            background: 'linear-gradient(135deg, #1e1c2e 0%, #13121f 100%)',
-            border: '1px solid rgba(168,85,247,0.25)',
-            boxShadow: '0 0 60px rgba(168,85,247,0.15)',
             display: 'flex',
             flexDirection: 'column',
             gap: 16,
           }}
         >
-          {/* Points */}
-          <div style={{ textAlign: 'center', marginBottom: 4 }}>
-            <div
-              style={{
-                fontFamily: "'Bebas Neue', sans-serif",
-                fontSize: 'clamp(3rem, 12vw, 4.5rem)',
-                lineHeight: 1,
-                color: points > 0 ? '#06d6a0' : '#ff4d6d',
-                textShadow: points > 0 ? '0 0 40px rgba(6,214,160,0.6)' : '0 0 40px rgba(255,77,109,0.5)',
-              }}
-            >
-              {points > 0 ? `+${points}` : '0'}
-            </div>
-            <div style={{ color: '#8b7fb8', fontSize: '0.82rem', marginTop: 4 }}>Punkte</div>
-          </div>
-
-          {/* Points breakdown: 4×1 */}
+          {/* Punkte-Breakdown: 4×1 */}
           <div
             style={{
               display: 'grid',
               gridTemplateColumns: '1fr 1fr',
               gap: 8,
-              padding: 12,
-              borderRadius: 12,
-              background: 'rgba(168,85,247,0.06)',
-              border: '1px solid rgba(168,85,247,0.12)',
             }}
           >
             <BreakdownItem label="🎤 Interpret" ok={artistCorrect} />
@@ -179,63 +153,72 @@ export default function ResultScreen() {
             <BreakdownItem label="📊 Timeline" ok={timelineCorrect} />
           </div>
 
-          {/* Year Diff Detail */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <span style={{ color: '#8b7fb8', fontSize: '0.82rem', width: 90 }}>📅 Jahr</span>
+          {/* Jahres-Detail */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="mono-label" style={{ width: 90 }}>📅 Jahr</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
               {guessedYear ? (
                 yearExact ? (
-                  <span style={{ color: '#06d6a0', fontSize: '0.9rem', fontWeight: 700 }}>
+                  <span style={{ color: 'var(--green)', fontSize: '0.95rem', fontWeight: 700 }}>
                     {guessedYear} ✓
                   </span>
                 ) : (
                   <>
-                    <span style={{ color: '#ff4d6d', fontSize: '0.9rem', textDecoration: 'line-through' }}>
+                    <span style={{ color: 'var(--red)', fontSize: '0.95rem', textDecoration: 'line-through' }}>
                       {guessedYear}
                     </span>
-                    <span style={{ color: '#8b7fb8' }}>→</span>
-                    <span style={{ color: '#a855f7', fontSize: '0.9rem' }}>{song.year}</span>
+                    <span style={{ color: 'var(--dim)' }}>→</span>
+                    <span style={{ color: 'var(--lime)', fontSize: '0.95rem', fontWeight: 700 }}>{song.year}</span>
                   </>
                 )
               ) : (
-                <span style={{ color: '#ff4d6d', fontSize: '0.9rem' }}>—</span>
+                <span style={{ color: 'var(--red)', fontSize: '0.9rem' }}>—</span>
               )}
             </div>
             <span
               style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: '0.78rem',
-                color: yearDiffClass,
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.75rem',
+                color: yearDiffColor,
               }}
             >
               {yearDiff > 0 ? `±${yearDiff} · ${yearDiffLabel}` : yearDiffLabel}
             </span>
           </div>
 
-          {/* Song Reveal */}
+          {/* Song-Auflösung */}
           <div
+            className="panel-inset"
             style={{
-              padding: 12,
-              borderRadius: 12,
-              background: 'rgba(168,85,247,0.08)',
-              border: '1px solid rgba(168,85,247,0.15)',
+              padding: 16,
               textAlign: 'center',
-              marginTop: 4,
+              display: 'grid',
+              gap: 6,
+              justifyItems: 'center',
             }}
           >
-            <div style={{ fontSize: 32, marginBottom: 4 }}>{song.emoji}</div>
-            <div
-              style={{
-                fontFamily: "'Bebas Neue', sans-serif",
-                fontSize: '1.5rem',
-                background: 'linear-gradient(90deg, #a855f7, #f72585)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-              }}
-            >
-              {song.artist} — {song.title}
+            {song.coverUrl ? (
+              <img
+                src={song.coverUrl}
+                alt=""
+                style={{
+                  width: 92, height: 92, borderRadius: 14, objectFit: 'cover',
+                  border: '1px solid var(--line-strong)',
+                  boxShadow: '0 12px 30px rgba(0,0,0,0.55)',
+                  transform: 'rotate(-2deg)',
+                }}
+              />
+            ) : (
+              <div style={{ fontSize: 38 }}>{song.emoji}</div>
+            )}
+            <div className="display" style={{ fontSize: 'clamp(1.1rem, 4.5vw, 1.4rem)', lineHeight: 1.15, marginTop: 4 }}>
+              <span style={{ color: 'var(--lime)' }}>{song.artist}</span>
+              <span className="serif-note" style={{ color: 'var(--dim)', textTransform: 'none', margin: '0 6px' }}>—</span>
+              <span style={{ color: 'var(--pink)' }}>{song.title}</span>
             </div>
-            <div style={{ color: '#8b7fb8', fontSize: '0.8rem', marginTop: 2 }}>{song.genre} · {song.year}</div>
+            <div style={{ fontFamily: 'var(--font-mono)', color: 'var(--muted)', fontSize: '0.78rem' }}>
+              {song.genre} · {song.year}
+            </div>
           </div>
         </div>
 
@@ -244,41 +227,14 @@ export default function ResultScreen() {
           <Scoreboard players={players} currentRound={round} totalRounds={totalRounds} />
         </div>
 
-        {/* Continue Button */}
+        {/* Weiter */}
         <button
           onClick={handleContinue}
           disabled={resolving}
-          className="fade-up"
-          style={{
-            opacity: resolving ? 0.6 : 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 10,
-            width: '100%',
-            padding: '18px 24px',
-            borderRadius: 16,
-            border: 'none',
-            cursor: 'pointer',
-            background: 'linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #f72585 100%)',
-            color: 'white',
-            fontWeight: 700,
-            fontSize: '1.05rem',
-            letterSpacing: '0.02em',
-            boxShadow: '0 0 40px rgba(168,85,247,0.4)',
-            marginTop: 16,
-            transition: 'transform 0.15s, box-shadow 0.15s',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = 'scale(1.03)';
-            e.currentTarget.style.boxShadow = '0 0 55px rgba(168,85,247,0.55)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = 'scale(1)';
-            e.currentTarget.style.boxShadow = '0 0 40px rgba(168,85,247,0.4)';
-          }}
+          className="fade-up btn-primary"
+          style={{ marginTop: 18 }}
         >
-          {isGameOver ? '🏆 Zum Finale' : 'Weiter ›'}
+          {isGameOver ? '🏆 Zum Finale' : 'Weiter →'}
         </button>
       </div>
     </div>
@@ -293,19 +249,18 @@ function BreakdownItem({ label, ok }: { label: string; ok: boolean }) {
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 6,
-        padding: '6px 10px',
-        borderRadius: 8,
-        background: ok ? 'rgba(6,214,160,0.08)' : 'rgba(255,77,109,0.06)',
+        padding: '8px 12px',
+        borderRadius: 10,
+        background: ok ? 'rgba(30,215,96,0.08)' : 'rgba(255,84,112,0.06)',
+        border: ok ? '1px solid rgba(30,215,96,0.25)' : '1px solid rgba(255,84,112,0.18)',
       }}
     >
-      <span style={{ color: '#8b7fb8', fontSize: '0.78rem' }}>{label}</span>
-      <span style={{ fontSize: '1rem' }}>{ok ? '✅' : '❌'}</span>
+      <span style={{ color: 'var(--muted)', fontSize: '0.78rem', fontWeight: 500 }}>{label}</span>
       <span
+        className="display"
         style={{
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: '0.78rem',
-          fontWeight: 700,
-          color: ok ? '#06d6a0' : '#ff4d6d',
+          fontSize: '0.85rem',
+          color: ok ? 'var(--green)' : 'var(--red)',
         }}
       >
         +{ok ? '1' : '0'}

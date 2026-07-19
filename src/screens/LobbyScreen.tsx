@@ -22,6 +22,9 @@ type HistoryStatus = 'idle' | 'syncing' | 'done' | 'error';
 
 const DEFAULT_CATEGORY = 'random_hits';
 
+// Akzentfarbe pro Kategorie-Kachel — gibt jeder Kachel ihren eigenen Charakter
+const CATEGORY_ACCENTS = ['var(--lime)', 'var(--pink)', 'var(--cyan)', 'var(--orange)'];
+
 export default function LobbyScreen() {
   const navigate = useNavigate();
   const [gameCode, setGameCode] = useState('');
@@ -403,73 +406,83 @@ export default function LobbyScreen() {
     return (
       <div style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center',
-        minHeight: '100vh', padding: '24px 16px 40px', gap: 20,
+        minHeight: '100vh', padding: '0 16px 48px', gap: 22,
         position: 'relative', zIndex: 1,
       }}>
-        <div className="fade-up" style={{ textAlign: 'center', marginTop: 20 }}>
-          <div style={{
-            width: 56, height: 56, borderRadius: 16,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'linear-gradient(135deg, #7c3aed, #a855f7)',
-            boxShadow: '0 0 30px rgba(168,85,247,0.5)',
-            margin: '0 auto 16px', fontSize: 26,
-          }}>🎵</div>
-          <h1 style={{
-            fontFamily: "'Bebas Neue', sans-serif",
-            fontSize: 'clamp(2rem,8vw,3.5rem)', lineHeight: 0.95,
-            letterSpacing: '0.02em', textAlign: 'center',
-          }}>
-            LOBBY
+        <Ticker text={`GAME ${lobbyCode} · WARTERAUM · CREW SAMMELN ·`} />
+
+        {/* Kopf */}
+        <div className="fade-up" style={{ textAlign: 'center', marginTop: 6 }}>
+          <h1 className="heading-xl" style={{ position: 'relative', display: 'inline-block' }}>
+            <span className="outline-text">Warte</span>
+            <span style={{ color: 'var(--lime)' }}>raum</span>
+            <span
+              className="sticker pink tilt-r"
+              style={{ position: 'absolute', top: -12, right: -28 }}
+            >
+              {lobbyPlayers.length} {lobbyPlayers.length === 1 ? 'Spieler' : 'Spieler'}
+            </span>
           </h1>
+          <p className="serif-note" style={{ color: 'var(--muted)', fontSize: '1.05rem', marginTop: 6 }}>
+            gleich geht's los …
+          </p>
         </div>
 
-        {/* Game Code Display */}
-        <div className="pop-in" style={{
+        {/* Game-Code-Ticket */}
+        <div className="pop-in panel" style={{
           textAlign: 'center',
-          padding: '20px 32px',
-          borderRadius: 16,
-          background: '#13121f',
-          border: '1px solid rgba(168,85,247,0.3)',
-          boxShadow: '0 0 40px rgba(168,85,247,0.15)',
+          padding: '22px 30px',
+          width: '100%',
+          maxWidth: 400,
+          overflow: 'hidden',
         }}>
-          <div style={{ color: '#8b7fb8', fontSize: '0.82rem', marginBottom: 8 }}>Game-Code</div>
-          <div style={{
-            fontFamily: "'Bebas Neue', sans-serif",
-            fontSize: 'clamp(2.5rem, 10vw, 4rem)',
-            letterSpacing: '0.15em',
-            background: 'linear-gradient(90deg, #a855f7, #f72585)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-          }}>
-            {lobbyCode}
-          </div>
-          <div style={{ color: '#6a5f8a', fontSize: '0.75rem', marginTop: 8 }}>
-            Teile diesen Code mit anderen Spielern
-          </div>
-          <button
-            onClick={handleShareLink}
+          <div
+            aria-hidden
             style={{
-              marginTop: 12, padding: '8px 16px', borderRadius: 10, border: '1px solid rgba(168,85,247,0.35)',
-              background: 'rgba(168,85,247,0.1)', color: '#c4b8ff', cursor: 'pointer',
-              fontSize: '0.8rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6,
+              position: 'absolute', inset: 0, pointerEvents: 'none', opacity: 0.5,
+              background: 'radial-gradient(ellipse 90% 70% at 50% -20%, rgba(214,245,69,0.12), transparent)',
             }}
-          >
+          />
+          <div className="mono-label" style={{ marginBottom: 12 }}>Game-Code</div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+            {lobbyCode.split('').map((ch, i) => (
+              <span
+                key={i}
+                className="display pop-in"
+                style={{
+                  width: 'clamp(44px, 13vw, 58px)',
+                  height: 'clamp(56px, 16vw, 72px)',
+                  display: 'grid',
+                  placeItems: 'center',
+                  fontSize: 'clamp(1.6rem, 7vw, 2.3rem)',
+                  borderRadius: 12,
+                  background: 'rgba(244,241,255,0.05)',
+                  border: '1px solid var(--line-strong)',
+                  color: i % 2 === 0 ? 'var(--lime)' : 'var(--pink)',
+                  animationDelay: `${i * 0.07}s`,
+                }}
+              >
+                {ch}
+              </span>
+            ))}
+          </div>
+          <div style={{ color: 'var(--dim)', fontSize: '0.78rem', marginTop: 12 }}>
+            Teile diesen Code mit deiner Crew
+          </div>
+          <button onClick={handleShareLink} className="btn-ghost" style={{ margin: '12px auto 0', fontSize: '0.8rem', padding: '9px 16px' }}>
             {linkCopied ? '✓ Link kopiert!' : '🔗 Einladungslink teilen'}
           </button>
         </div>
 
-        {/* Players in Lobby */}
-        <div className="fade-up" style={{ width: '100%', maxWidth: 400, animationDelay: '0.1s' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <span style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>👥 {lobbyPlayers.length} Spieler</span>
-          </div>
-          <div style={{
-            padding: '16px 12px', borderRadius: 16,
-            background: '#13121f', border: '1px solid rgba(168,85,247,0.2)',
-            display: 'flex', flexDirection: 'column', gap: 8,
-          }}>
+        {/* Line-up (Spieler) */}
+        <section className="fade-up" style={{ width: '100%', maxWidth: 400, animationDelay: '0.1s' }}>
+          <SectionHeading index="01" title="Line-up" />
+          <div className="panel" style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
             {lobbyPlayers.length === 0 ? (
-              <div style={{ color: '#8b7fb8', fontSize: '0.9rem', textAlign: 'center' }}>
+              <div style={{ color: 'var(--muted)', fontSize: '0.9rem', textAlign: 'center', padding: '10px 0' }}>
+                <span className="eq paused" style={{ marginRight: 8, verticalAlign: 'middle' }}>
+                  <span /><span /><span /><span />
+                </span>
                 Warte auf Spieler…
               </div>
             ) : (
@@ -479,38 +492,42 @@ export default function LobbyScreen() {
                 return (
                   <div key={p.id} style={{
                     display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '8px 12px', borderRadius: 10,
-                    background: isSelf ? 'rgba(168,85,247,0.12)' : 'transparent',
+                    padding: '9px 12px', borderRadius: 12,
+                    background: isSelf ? 'rgba(214,245,69,0.06)' : 'transparent',
+                    border: isSelf ? '1px solid rgba(214,245,69,0.2)' : '1px solid transparent',
                   }}>
-                    <span style={{ fontSize: 20 }}>{p.avatar}</span>
-                    <span style={{ color: '#f0eeff', fontWeight: 600 }}>{p.name}</span>
-                    {isSelf && (
-                      <span style={{
-                        fontSize: '0.7rem', padding: '2px 8px', borderRadius: 6,
-                        background: 'rgba(168,85,247,0.2)', color: '#a855f7',
-                      }}>DU</span>
-                    )}
+                    <span style={{
+                      width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
+                      display: 'grid', placeItems: 'center', fontSize: 17,
+                      background: 'rgba(139,92,246,0.18)', border: '1px solid var(--line)',
+                    }}>{p.avatar}</span>
+                    <span style={{ color: 'var(--ink)', fontWeight: 600, fontSize: '0.92rem' }}>{p.name}</span>
+                    {isSelf && <span className="sticker" style={{ fontSize: '0.52rem', padding: '3px 7px' }}>Du</span>}
                     <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
                       {hasHistory ? (
                         <span title="Spotify verbunden" style={{
-                          fontSize: '0.7rem', padding: '2px 8px', borderRadius: 6,
-                          background: 'rgba(29,185,84,0.15)', color: '#1db954', fontWeight: 600,
-                        }}>✓ Spotify</span>
+                          fontFamily: 'var(--font-mono)', fontSize: '0.66rem', fontWeight: 600,
+                          padding: '3px 9px', borderRadius: 999,
+                          background: 'rgba(30,215,96,0.14)', color: 'var(--green)',
+                          border: '1px solid rgba(30,215,96,0.3)',
+                        }}>✓ SPOTIFY</span>
                       ) : isSelf ? (
                         <button
                           onClick={handleConnectSpotify}
                           disabled={historyStatus === 'syncing'}
                           style={{
-                            fontSize: '0.72rem', padding: '4px 10px', borderRadius: 8,
+                            fontFamily: 'var(--font-mono)', fontSize: '0.68rem', fontWeight: 600,
+                            padding: '5px 11px', borderRadius: 999,
                             border: 'none', cursor: historyStatus === 'syncing' ? 'default' : 'pointer',
-                            background: '#1db954', color: '#04160a', fontWeight: 700,
+                            background: 'var(--green)', color: '#04160a',
                             opacity: historyStatus === 'syncing' ? 0.6 : 1,
+                            transition: 'transform 0.12s',
                           }}
                         >
-                          {historyStatus === 'syncing' ? '⏳ Sync…' : '♫ Spotify verbinden'}
+                          {historyStatus === 'syncing' ? '⏳ SYNC…' : '♫ SPOTIFY VERBINDEN'}
                         </button>
                       ) : (
-                        <span title="Noch nicht verbunden" style={{ fontSize: '0.7rem', color: '#6a5f8a' }}>–</span>
+                        <span title="Noch nicht verbunden" style={{ fontSize: '0.7rem', color: 'var(--dim)' }}>–</span>
                       )}
                     </span>
                   </div>
@@ -518,21 +535,18 @@ export default function LobbyScreen() {
               })
             )}
           </div>
-        </div>
+        </section>
 
-        {/* Category Selection */}
-        <div className="fade-up" style={{ width: '100%', maxWidth: 400, animationDelay: '0.14s' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <span style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>
-              🎯 Kategorie {isHost ? 'wählen' : ''}
-            </span>
-          </div>
+        {/* Kategorie */}
+        <section className="fade-up" style={{ width: '100%', maxWidth: 400, animationDelay: '0.14s' }}>
+          <SectionHeading index="02" title={isHost ? 'Kategorie wählen' : 'Kategorie'} />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            {categories.map((cat) => {
+            {categories.map((cat, idx) => {
               const avail = categoryAvailability[cat.name];
               const eligible = avail?.eligible ?? !cat.requiresHistory;
               const selected = selectedCategory === cat.name;
               const clickable = isHost && eligible;
+              const accent = CATEGORY_ACCENTS[idx % CATEGORY_ACCENTS.length];
               return (
                 <button
                   key={cat.name}
@@ -540,32 +554,50 @@ export default function LobbyScreen() {
                   disabled={!clickable}
                   title={!eligible ? avail?.reason : cat.description}
                   style={{
-                    textAlign: 'left', padding: '12px 12px', borderRadius: 12,
-                    border: selected ? '1px solid rgba(6,214,160,0.6)' : '1px solid rgba(168,85,247,0.2)',
-                    background: selected ? 'rgba(6,214,160,0.08)' : '#13121f',
+                    position: 'relative',
+                    textAlign: 'left', padding: '14px 12px 12px', borderRadius: 16,
+                    border: selected ? `2px solid ${accent}` : '1px solid var(--line)',
+                    background: selected
+                      ? `linear-gradient(160deg, color-mix(in srgb, ${accent} 12%, var(--bg-2)), var(--bg-2))`
+                      : 'var(--bg-2)',
                     cursor: clickable ? 'pointer' : 'default',
-                    opacity: eligible ? 1 : 0.45,
-                    transition: 'border-color 0.15s, background 0.15s',
+                    opacity: eligible ? 1 : 0.42,
+                    transform: selected ? 'rotate(-0.6deg) scale(1.02)' : 'none',
+                    transition: 'border-color 0.15s, background 0.15s, transform 0.2s',
                   }}
                 >
-                  <div style={{ fontSize: 20, marginBottom: 4 }}>{cat.emoji}</div>
-                  <div style={{
-                    color: selected ? '#06d6a0' : '#f0eeff', fontWeight: 700, fontSize: '0.85rem',
-                    display: 'flex', alignItems: 'center', gap: 6,
-                  }}>
+                  {selected && (
+                    <span
+                      className="sticker"
+                      style={{
+                        position: 'absolute', top: -9, right: -6,
+                        fontSize: '0.5rem', padding: '3px 7px',
+                        background: accent, color: '#0b0a12',
+                      }}
+                    >
+                      ✓ Gewählt
+                    </span>
+                  )}
+                  <div style={{ fontSize: 24, marginBottom: 6 }}>{cat.emoji}</div>
+                  <div
+                    className="display"
+                    style={{ color: selected ? accent : 'var(--ink)', fontSize: '0.78rem', letterSpacing: '0.02em' }}
+                  >
                     {cat.label}
-                    {selected && <span style={{ fontSize: '0.75rem' }}>✓</span>}
                   </div>
-                  <div style={{ color: '#8b7fb8', fontSize: '0.68rem', marginTop: 3, lineHeight: 1.4 }}>
+                  <div style={{ color: 'var(--muted)', fontSize: '0.68rem', marginTop: 4, lineHeight: 1.45 }}>
                     {cat.description}
                   </div>
                   {!eligible && avail?.reason && (
-                    <div style={{ color: '#ffd60a', fontSize: '0.65rem', marginTop: 4 }}>
+                    <div style={{ color: 'var(--gold)', fontSize: '0.64rem', marginTop: 5 }}>
                       ⚠ {avail.reason}
                     </div>
                   )}
                   {eligible && cat.requiresHistory && avail && (
-                    <div style={{ color: '#06d6a0', fontSize: '0.65rem', marginTop: 4 }}>
+                    <div style={{
+                      fontFamily: 'var(--font-mono)', color: 'var(--green)',
+                      fontSize: '0.62rem', marginTop: 5,
+                    }}>
                       {avail.totalSongs} Songs verfügbar
                     </div>
                   )}
@@ -574,170 +606,152 @@ export default function LobbyScreen() {
             })}
           </div>
           {!isHost && (
-            <div style={{ color: '#6a5f8a', fontSize: '0.7rem', marginTop: 6, textAlign: 'center' }}>
+            <div style={{ color: 'var(--dim)', fontSize: '0.7rem', marginTop: 6, textAlign: 'center' }}>
               Der Host wählt die Kategorie
             </div>
           )}
-        </div>
+        </section>
 
-        {/* Settings (host adjustable, everyone sees them) */}
-        <div className="fade-up" style={{
-          display: 'grid', gridTemplateColumns: '1fr', gap: 10,
-          width: '100%', maxWidth: 400, animationDelay: '0.18s',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>⚙️ Regeln {isHost ? '' : '(nur Host)'}</span>
-          </div>
+        {/* Regeln */}
+        <section className="fade-up" style={{ width: '100%', maxWidth: 400, animationDelay: '0.18s' }}>
+          <SectionHeading index="03" title={isHost ? 'Regeln' : 'Regeln (nur Host)'} />
+          <div style={{ display: 'grid', gap: 10 }}>
 
-          {/* Cards per player */}
-          <div style={settingRowStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 20 }}>🃏</span>
-              <span style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>Karten pro Spieler</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              {isHost && (
-                <button
-                  onClick={() => handleChangeRounds(-1)}
-                  disabled={(lobbySettings?.totalRounds ?? 5) <= 3}
-                  style={stepperButtonStyle((lobbySettings?.totalRounds ?? 5) <= 3)}
-                >−</button>
-              )}
-              <span style={{
-                fontFamily: "'Bebas Neue', sans-serif", fontSize: '1.5rem',
-                color: '#a855f7', minWidth: 28, textAlign: 'center', lineHeight: 1,
-              }}>
-                {displayInfo.totalRounds}
-              </span>
-              {isHost && (
-                <button
-                  onClick={() => handleChangeRounds(1)}
-                  disabled={(lobbySettings?.totalRounds ?? 5) >= 10}
-                  style={stepperButtonStyle((lobbySettings?.totalRounds ?? 5) >= 10)}
-                >+</button>
-              )}
-            </div>
-          </div>
-
-          {/* Guess mode: type vs. speak */}
-          <div style={settingRowStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 20 }}>{(lobbySettings?.guessMode ?? 'type') === 'speak' ? '🗣️' : '⌨️'}</span>
-              <div>
-                <div style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>Rate-Modus</div>
-                <div style={{ color: '#6a5f8a', fontSize: '0.68rem', marginTop: 2 }}>
-                  {(lobbySettings?.guessMode ?? 'type') === 'speak'
-                    ? 'Laut ansagen — Mitspieler bewerten'
-                    : 'Eintippen — automatische Wertung'}
-                </div>
+            {/* Karten pro Spieler */}
+            <div style={settingRowStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 20 }}>🃏</span>
+                <span style={{ color: 'var(--muted)', fontSize: '0.85rem', fontWeight: 500 }}>Karten pro Spieler</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {isHost && (
+                  <button
+                    onClick={() => handleChangeRounds(-1)}
+                    disabled={(lobbySettings?.totalRounds ?? 5) <= 3}
+                    style={stepperButtonStyle((lobbySettings?.totalRounds ?? 5) <= 3)}
+                  >−</button>
+                )}
+                <span className="display" style={{
+                  fontSize: '1.4rem', color: 'var(--lime)',
+                  minWidth: 32, textAlign: 'center', lineHeight: 1,
+                  fontVariantNumeric: 'tabular-nums',
+                }}>
+                  {displayInfo.totalRounds}
+                </span>
+                {isHost && (
+                  <button
+                    onClick={() => handleChangeRounds(1)}
+                    disabled={(lobbySettings?.totalRounds ?? 5) >= 10}
+                    style={stepperButtonStyle((lobbySettings?.totalRounds ?? 5) >= 10)}
+                  >+</button>
+                )}
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <OptionChip
-                active={(lobbySettings?.guessMode ?? 'type') === 'type'}
-                disabled={!isHost}
-                onClick={() => handleChangeSetting({ guessMode: 'type' })}
-              >⌨️ Tippen</OptionChip>
-              <OptionChip
-                active={(lobbySettings?.guessMode ?? 'type') === 'speak'}
-                disabled={!isHost}
-                onClick={() => handleChangeSetting({ guessMode: 'speak' })}
-              >🗣️ Ansagen</OptionChip>
-            </div>
-          </div>
 
-          {/* Answer time */}
-          <div style={settingRowStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 20 }}>⏱️</span>
-              <div>
-                <div style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>Antwortzeit</div>
-                <div style={{ color: '#6a5f8a', fontSize: '0.68rem', marginTop: 2 }}>
-                  {(lobbySettings?.answerTimeSec ?? 0) === 0 ? 'Kein Zeitlimit' : 'Pro Zug, ab Karte ziehen'}
+            {/* Rate-Modus: tippen vs. ansagen */}
+            <div style={settingRowStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 20 }}>{(lobbySettings?.guessMode ?? 'type') === 'speak' ? '🗣️' : '⌨️'}</span>
+                <div>
+                  <div style={{ color: 'var(--muted)', fontSize: '0.85rem', fontWeight: 500 }}>Rate-Modus</div>
+                  <div style={{ color: 'var(--dim)', fontSize: '0.68rem', marginTop: 2 }}>
+                    {(lobbySettings?.guessMode ?? 'type') === 'speak'
+                      ? 'Laut ansagen — Mitspieler bewerten'
+                      : 'Eintippen — automatische Wertung'}
+                  </div>
                 </div>
               </div>
-            </div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {[0, 30, 45, 60, 90].map((secs) => (
-                <OptionChip
-                  key={secs}
-                  active={(lobbySettings?.answerTimeSec ?? 0) === secs}
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  className={`chip${(lobbySettings?.guessMode ?? 'type') === 'type' ? ' active' : ''}`}
                   disabled={!isHost}
-                  onClick={() => handleChangeSetting({ answerTimeSec: secs })}
-                >{secs === 0 ? 'Aus' : `${secs}s`}</OptionChip>
-              ))}
-            </div>
-          </div>
-
-          {/* Buzzer */}
-          <div style={{
-            ...settingRowStyle,
-            opacity: (lobbySettings?.answerTimeSec ?? 0) > 0 && (lobbySettings?.guessMode ?? 'type') === 'type' ? 1 : 0.45,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 20 }}>🔔</span>
-              <div>
-                <div style={{ color: '#8b7fb8', fontSize: '0.85rem' }}>Buzzer</div>
-                <div style={{ color: '#6a5f8a', fontSize: '0.68rem', marginTop: 2 }}>
-                  {(lobbySettings?.answerTimeSec ?? 0) === 0
-                    ? 'Braucht eine Antwortzeit'
-                    : (lobbySettings?.guessMode ?? 'type') === 'speak'
-                      ? 'Nur im Tipp-Modus'
-                      : 'Nach Zeitablauf: 1 Punkt klauen'}
-                </div>
+                  onClick={() => handleChangeSetting({ guessMode: 'type' })}
+                >⌨ Tippen</button>
+                <button
+                  className={`chip${(lobbySettings?.guessMode ?? 'type') === 'speak' ? ' active' : ''}`}
+                  disabled={!isHost}
+                  onClick={() => handleChangeSetting({ guessMode: 'speak' })}
+                >🗣 Ansagen</button>
               </div>
             </div>
-            <OptionChip
-              active={!!lobbySettings?.buzzerEnabled}
-              disabled={!isHost || (lobbySettings?.answerTimeSec ?? 0) === 0 || (lobbySettings?.guessMode ?? 'type') === 'speak'}
-              onClick={() => handleChangeSetting({ buzzerEnabled: !lobbySettings?.buzzerEnabled })}
-            >{lobbySettings?.buzzerEnabled ? 'An' : 'Aus'}</OptionChip>
-          </div>
-        </div>
 
-        {/* Actions */}
+            {/* Antwortzeit */}
+            <div style={settingRowStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 20 }}>⏱️</span>
+                <div>
+                  <div style={{ color: 'var(--muted)', fontSize: '0.85rem', fontWeight: 500 }}>Antwortzeit</div>
+                  <div style={{ color: 'var(--dim)', fontSize: '0.68rem', marginTop: 2 }}>
+                    {(lobbySettings?.answerTimeSec ?? 0) === 0 ? 'Kein Zeitlimit' : 'Pro Zug, ab Karte ziehen'}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {[0, 30, 45, 60, 90].map((secs) => (
+                  <button
+                    key={secs}
+                    className={`chip${(lobbySettings?.answerTimeSec ?? 0) === secs ? ' active' : ''}`}
+                    disabled={!isHost}
+                    onClick={() => handleChangeSetting({ answerTimeSec: secs })}
+                  >{secs === 0 ? 'Aus' : `${secs}s`}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Buzzer */}
+            <div style={{
+              ...settingRowStyle,
+              opacity: (lobbySettings?.answerTimeSec ?? 0) > 0 && (lobbySettings?.guessMode ?? 'type') === 'type' ? 1 : 0.45,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 20 }}>🔔</span>
+                <div>
+                  <div style={{ color: 'var(--muted)', fontSize: '0.85rem', fontWeight: 500 }}>Buzzer</div>
+                  <div style={{ color: 'var(--dim)', fontSize: '0.68rem', marginTop: 2 }}>
+                    {(lobbySettings?.answerTimeSec ?? 0) === 0
+                      ? 'Braucht eine Antwortzeit'
+                      : (lobbySettings?.guessMode ?? 'type') === 'speak'
+                        ? 'Nur im Tipp-Modus'
+                        : 'Nach Zeitablauf: 1 Punkt klauen'}
+                  </div>
+                </div>
+              </div>
+              <button
+                className={`chip${lobbySettings?.buzzerEnabled ? ' active' : ''}`}
+                disabled={!isHost || (lobbySettings?.answerTimeSec ?? 0) === 0 || (lobbySettings?.guessMode ?? 'type') === 'speak'}
+                onClick={() => handleChangeSetting({ buzzerEnabled: !lobbySettings?.buzzerEnabled })}
+              >{lobbySettings?.buzzerEnabled ? 'An' : 'Aus'}</button>
+            </div>
+          </div>
+        </section>
+
+        {/* Aktionen */}
         <div className="fade-up" style={{ width: '100%', maxWidth: 400, animationDelay: '0.25s' }}>
           {isHost ? (
             <>
-              <button
-                onClick={handleStartGame}
-                disabled={loading}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                  width: '100%', padding: '18px 24px', borderRadius: 16, border: 'none',
-                  cursor: loading ? 'default' : 'pointer',
-                  background: 'linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #f72585 100%)',
-                  color: 'white', fontWeight: 700, fontSize: '1.05rem', letterSpacing: '0.02em',
-                  boxShadow: loading ? 'none' : '0 0 40px rgba(168,85,247,0.4)',
-                  opacity: loading ? 0.6 : 1,
-                  transition: 'transform 0.15s, box-shadow 0.15s',
-                }}
-                onMouseEnter={(e) => { if (!loading) { e.currentTarget.style.transform = 'scale(1.03)'; e.currentTarget.style.boxShadow = '0 0 55px rgba(168,85,247,0.55)'; }}}
-                onMouseLeave={(e) => { if (!loading) { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 0 40px rgba(168,85,247,0.4)'; }}}
-              >
-                {loading ? '⏳ Wird gestartet…' : '🎮 Spiel starten'}
+              <button onClick={handleStartGame} disabled={loading} className="btn-primary">
+                {loading ? (<><span className="spinner" /> Wird gestartet…</>) : '▶ Spiel starten'}
               </button>
               <button
                 onClick={handleLeaveLobby}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                  width: '100%', padding: '12px', borderRadius: 12, border: 'none',
-                  cursor: 'pointer', marginTop: 8,
-                  background: 'rgba(255,77,109,0.1)', color: '#ff4d6d',
-                  fontWeight: 600, fontSize: '0.9rem',
-                }}
+                className="btn-ghost danger"
+                style={{ width: '100%', marginTop: 10 }}
               >
                 Lobby verlassen
               </button>
             </>
           ) : (
-            <p style={{ color: '#8b7fb8', fontSize: '0.9rem', textAlign: 'center' }}>
+            <p style={{
+              color: 'var(--muted)', fontSize: '0.9rem', textAlign: 'center',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+            }}>
+              <span className="eq"><span /><span /><span /><span /></span>
               Warte darauf, dass der Host das Spiel startet…
             </p>
           )}
         </div>
 
-        {error && <div style={{ color: '#ff4d6d', fontSize: '0.85rem', textAlign: 'center' }}>{error}</div>}
+        {error && <div className="error-banner" style={{ maxWidth: 400, width: '100%' }}>{error}</div>}
       </div>
     );
   }
@@ -746,87 +760,119 @@ export default function LobbyScreen() {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center',
-      minHeight: '100vh', padding: '24px 16px 40px', gap: 20,
+      minHeight: '100vh', padding: '0 16px 48px', gap: 24,
       position: 'relative', zIndex: 1,
     }}>
-      {/* ─── Header ─── */}
-      <div className="fade-up" style={{ textAlign: 'center', marginTop: 20 }}>
-        <div style={{
-          width: 56, height: 56, borderRadius: 16,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'linear-gradient(135deg, #7c3aed, #a855f7)',
-          boxShadow: '0 0 30px rgba(168,85,247,0.5)',
-          margin: '0 auto 16px', fontSize: 26,
-        }}>🎵</div>
-        <h1 style={{
-          fontFamily: "'Bebas Neue', sans-serif",
-          fontSize: 'clamp(3rem,12vw,6rem)', lineHeight: 0.95,
-          letterSpacing: '0.02em', textAlign: 'center',
-        }}>
-          BEAT<br />
-          <span style={{
-            background: 'linear-gradient(90deg, #a855f7, #f72585)',
-            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-          }}>TIMELINE</span>
+      <Ticker text="BEAT TIMELINE · RATE DEN SONG · PLATZIERE DAS JAHR · HÖR GENAU HIN ·" />
+
+      {/* ─── Hero ─── */}
+      <div className="fade-up" style={{ textAlign: 'center', marginTop: 'clamp(18px, 6vh, 56px)', position: 'relative' }}>
+        <h1 className="heading-giant" style={{ position: 'relative', display: 'inline-block' }}>
+          <span className="outline-text" style={{ display: 'block' }}>Beat</span>
+          <span style={{ display: 'block', color: 'var(--lime)', textShadow: '5px 5px 0 rgba(255,79,163,0.55)' }}>
+            Time
+          </span>
+          <span style={{ display: 'block', color: 'var(--pink)', textShadow: '5px 5px 0 rgba(214,245,69,0.35)' }}>
+            line
+          </span>
+          {/* Vinyl im Layout verankert */}
+          <span
+            aria-hidden
+            className="vinyl spinning"
+            style={{
+              position: 'absolute',
+              width: 'clamp(64px, 18vw, 104px)',
+              height: 'clamp(64px, 18vw, 104px)',
+              right: 'clamp(-40px, -8vw, -56px)',
+              top: '30%',
+              zIndex: -1,
+              opacity: 0.9,
+            }}
+          >
+            <span style={{ width: '26%', height: '26%', borderRadius: '50%', background: 'var(--pink)', zIndex: 1 }} />
+          </span>
+          <span
+            className="sticker gold"
+            style={{ position: 'absolute', top: -14, left: -18, fontSize: '0.58rem' }}
+          >
+            Multiplayer
+          </span>
         </h1>
-        <p style={{ color: '#8b7fb8', fontSize: '0.95rem', textAlign: 'center', maxWidth: 340, margin: '12px auto 0', lineHeight: 1.5 }}>
-          Ziehe Karten · Platziere Songs auf der Timeline · Rate Interpret &amp; Titel
+        <p className="serif-note" style={{ color: 'var(--muted)', fontSize: 'clamp(1.05rem, 3.5vw, 1.3rem)', maxWidth: 340, margin: '14px auto 0', lineHeight: 1.5 }}>
+          Karte ziehen, Song erkennen,<br />das Jahr auf die Timeline setzen.
         </p>
       </div>
 
-      {/* ─── Mode Toggle ─── */}
-      <div className="fade-up" style={{
-        display: 'flex', gap: 8, animationDelay: '0.25s',
-        background: '#0a0a12', borderRadius: 12, padding: 4,
-        border: '1px solid rgba(168,85,247,0.15)',
-      }}>
-        <TabButton active={mode === 'create'} onClick={() => { setMode('create'); setError(null); }}>✨ Erstellen</TabButton>
-        <TabButton active={mode === 'join'} onClick={() => { setMode('join'); setError(null); }}>🔗 Beitreten</TabButton>
+      {/* ─── Modus-Umschalter ─── */}
+      <div className="fade-up" style={{ display: 'flex', gap: 22, animationDelay: '0.2s' }}>
+        <ModeTab active={mode === 'create'} onClick={() => { setMode('create'); setError(null); }}>
+          Neues Spiel
+        </ModeTab>
+        <ModeTab active={mode === 'join'} onClick={() => { setMode('join'); setError(null); }}>
+          Beitreten
+        </ModeTab>
       </div>
 
-      {/* ─── Create / Join Form ─── */}
-      <div className="fade-up" style={{
+      {/* ─── Formular ─── */}
+      <div className="fade-up panel" style={{
         display: 'flex', flexDirection: 'column', gap: 12,
-        padding: '24px 16px', borderRadius: 16,
-        background: '#13121f', border: '1px solid rgba(168,85,247,0.2)',
-        width: '100%', maxWidth: 400, animationDelay: '0.3s',
+        padding: '24px 18px',
+        width: '100%', maxWidth: 400, animationDelay: '0.28s',
       }}>
+        <label className="mono-label" htmlFor="player-name">Dein Name</label>
         <input
+          id="player-name"
+          className="text-input"
           type="text"
-          placeholder={mode === 'create' ? 'Dein Name (optional)' : 'Dein Name (optional)'}
+          placeholder="Dein Name (optional)"
           value={playerName}
           onChange={(e) => setPlayerName(e.target.value)}
-          style={inputStyle}
         />
         {mode === 'join' && (
-          <input
-            type="text"
-            placeholder="Game-Code (z.B. ABCD)"
-            value={gameCode}
-            onChange={(e) => setGameCode(e.target.value.toUpperCase())}
-            maxLength={4}
-            style={{ ...inputStyle, textTransform: 'uppercase', letterSpacing: '0.2em', textAlign: 'center', fontSize: '1.3rem' }}
-          />
+          <>
+            <label className="mono-label" htmlFor="game-code" style={{ marginTop: 4 }}>Game-Code</label>
+            <input
+              id="game-code"
+              className="text-input code"
+              type="text"
+              placeholder="ABCD"
+              value={gameCode}
+              onChange={(e) => setGameCode(e.target.value.toUpperCase())}
+              maxLength={4}
+            />
+            {lobbyInfo && (
+              <div className="panel-inset pop-in" style={{
+                display: 'flex', justifyContent: 'center', gap: 16, padding: '9px 12px',
+                fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--muted)',
+              }}>
+                <span>👥 {lobbyInfo.playerCount} in der Lobby</span>
+                <span>🃏 {lobbyInfo.totalRounds} Karten</span>
+              </div>
+            )}
+          </>
         )}
         <button
           onClick={mode === 'create' ? handleCreateGame : handleJoinGame}
           disabled={loading}
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-            width: '100%', padding: '18px 24px', borderRadius: 16, border: 'none',
-            cursor: loading ? 'default' : 'pointer',
-            background: 'linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #f72585 100%)',
-            color: 'white', fontWeight: 700, fontSize: '1.05rem', letterSpacing: '0.02em',
-            boxShadow: loading ? 'none' : '0 0 40px rgba(168,85,247,0.4)',
-            opacity: loading ? 0.6 : 1,
-            transition: 'transform 0.15s, box-shadow 0.15s',
-          }}
-          onMouseEnter={(e) => { if (!loading) { e.currentTarget.style.transform = 'scale(1.03)'; e.currentTarget.style.boxShadow = '0 0 55px rgba(168,85,247,0.55)'; }}}
-          onMouseLeave={(e) => { if (!loading) { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 0 40px rgba(168,85,247,0.4)'; }}}
+          className={`btn-primary${mode === 'join' ? ' pink' : ''}`}
+          style={{ marginTop: 6 }}
         >
-          {loading ? '⏳ Wird geladen…' : mode === 'create' ? '🎮 Game erstellen' : '🚪 Game beitreten'}
+          {loading ? (<><span className="spinner" /> Wird geladen…</>) : mode === 'create' ? '✦ Game erstellen' : '→ Game beitreten'}
         </button>
-        {error && <div style={{ color: '#ff4d6d', fontSize: '0.85rem', textAlign: 'center' }}>{error}</div>}
+        {error && <div className="error-banner">{error}</div>}
+      </div>
+
+      {/* Feature-Zeile */}
+      <div className="fade-up" style={{
+        display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '8px 22px',
+        animationDelay: '0.36s', maxWidth: 420,
+      }}>
+        {['♫ Spotify-History', '🃏 Timeline-Duell', '🔔 Buzzer-Steals'].map((f) => (
+          <span key={f} style={{
+            fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--dim)',
+            textTransform: 'uppercase', letterSpacing: '0.1em',
+          }}>{f}</span>
+        ))}
       </div>
     </div>
   );
@@ -834,38 +880,46 @@ export default function LobbyScreen() {
 
 // ─── Helpers ───
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+/** Laufender Ticker am oberen Rand */
+function Ticker({ text }: { text: string }) {
+  const chunk = ` ${text} `;
   return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: '10px 20px', borderRadius: 10, border: 'none', cursor: 'pointer',
-        background: active ? 'linear-gradient(135deg, #7c3aed, #a855f7)' : 'transparent',
-        color: active ? 'white' : '#8b7fb8',
-        fontWeight: 600, fontSize: '0.9rem',
-        transition: 'all 0.2s',
-      }}
-    >
-      {children}
-    </button>
+    <div className="marquee" style={{ width: '100%', padding: '12px 0', borderBottom: '1px solid var(--line)' }}>
+      <div className="marquee-inner">
+        {Array.from({ length: 6 }, (_, i) => (
+          <span key={i}>{i % 2 === 0 ? chunk : <em>{chunk}</em>}</span>
+        ))}
+      </div>
+    </div>
   );
 }
 
-function OptionChip({ active, disabled, onClick, children }: {
-  active: boolean; disabled?: boolean; onClick: () => void; children: React.ReactNode;
-}) {
+/** Editorial-Abschnittskopf: "01 — Line-up" */
+function SectionHeading({ index, title }: { index: string; title: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
+      <span className="display" style={{ fontSize: '0.85rem', color: 'var(--pink)' }}>{index}</span>
+      <span className="display" style={{ fontSize: '0.85rem', letterSpacing: '0.05em' }}>{title}</span>
+      <span style={{ flex: 1, height: 1, background: 'var(--line)', alignSelf: 'center' }} />
+    </div>
+  );
+}
+
+function ModeTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       onClick={onClick}
-      disabled={disabled}
+      className="display"
       style={{
-        padding: '6px 12px', borderRadius: 8,
-        border: active ? '1px solid rgba(6,214,160,0.6)' : '1px solid rgba(168,85,247,0.25)',
-        background: active ? 'rgba(6,214,160,0.12)' : 'transparent',
-        color: active ? '#06d6a0' : '#8b7fb8',
-        fontSize: '0.75rem', fontWeight: 600,
-        cursor: disabled ? 'default' : 'pointer',
-        transition: 'all 0.15s',
+        padding: '8px 2px',
+        border: 'none',
+        borderBottom: active ? '3px solid var(--lime)' : '3px solid transparent',
+        background: 'transparent',
+        cursor: 'pointer',
+        color: active ? 'var(--ink)' : 'var(--dim)',
+        fontSize: '1.05rem',
+        letterSpacing: '0.03em',
+        transition: 'color 0.2s, border-color 0.2s',
       }}
     >
       {children}
@@ -875,21 +929,15 @@ function OptionChip({ active, disabled, onClick, children }: {
 
 const settingRowStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-  padding: '12px 14px', borderRadius: 12,
-  background: 'rgba(168,85,247,0.07)', border: '1px solid rgba(168,85,247,0.15)',
+  padding: '13px 14px', borderRadius: 14,
+  background: 'var(--bg-2)', border: '1px solid var(--line)',
 };
 
 const stepperButtonStyle = (disabled: boolean): React.CSSProperties => ({
-  width: 30, height: 30, borderRadius: 8, border: '1px solid rgba(168,85,247,0.35)',
-  background: disabled ? 'transparent' : 'rgba(168,85,247,0.15)',
-  color: disabled ? '#6a5f8a' : '#a855f7',
+  width: 32, height: 32, borderRadius: 10,
+  border: disabled ? '1px solid var(--line)' : '1px solid var(--line-strong)',
+  background: disabled ? 'transparent' : 'rgba(214,245,69,0.1)',
+  color: disabled ? 'var(--dim)' : 'var(--lime)',
   fontSize: '1.1rem', fontWeight: 700, cursor: disabled ? 'default' : 'pointer',
   display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
 });
-
-const inputStyle: React.CSSProperties = {
-  width: '100%', padding: '12px 16px', borderRadius: 12,
-  outline: 'none', background: '#1e1c2e',
-  border: '1px solid rgba(168,85,247,0.25)',
-  color: '#f0eeff', fontSize: '1rem',
-};

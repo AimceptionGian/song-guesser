@@ -93,44 +93,32 @@ export default function Timeline({
 
   // Layout cards: evenly spaced, centered on timeline
   const laidOutCards = useMemo(() => layoutCards(placedCards), [placedCards]);
-  const cardsHeight = 100;
+  const cardsHeight = 104;
 
   return (
     <div
-      className="timeline-zone"
-      style={{
-        background: 'rgba(18,17,31,0.6)',
-        border: '1px solid rgba(168,85,247,0.2)',
-        borderRadius: 16,
-        padding: '16px 20px 12px',
-      }}
+      className="timeline-zone panel"
+      style={{ padding: '16px 20px 12px' }}
     >
+      {/* Kopfzeile: Label + grosses Jahr */}
       <div
-        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8, gap: 10 }}
       >
+        <span className="mono-label">Timeline · Song platzieren</span>
         <span
+          className="display"
           style={{
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: '0.72rem',
-            color: '#8b7fb8',
-            textTransform: 'uppercase',
-            letterSpacing: '0.04em',
-          }}
-        >
-          📅 Song auf der Timeline platzieren
-        </span>
-        <span
-          style={{
-            fontFamily: "'Bebas Neue', sans-serif",
-            fontSize: '1.3rem',
-            color: '#a855f7',
+            fontSize: '1.7rem',
+            color: dragging ? 'var(--pink)' : 'var(--lime)',
+            transition: 'color 0.15s',
+            fontVariantNumeric: 'tabular-nums',
           }}
         >
           {value}
         </span>
       </div>
 
-      {/* Placed cards — all at same Y, same-year cards side by side */}
+      {/* Platzierte Karten — alle auf gleicher Höhe, gleiche Jahre nebeneinander */}
       <div
         style={{
           position: 'relative',
@@ -142,10 +130,11 @@ export default function Timeline({
           return (
             <div
               key={i}
+              className="pop-in"
               style={{
                 position: 'absolute',
                 left: '50%',
-                transform: `translateX(calc(-50% + ${card.offsetPx}px))`,
+                transform: `translateX(calc(-50% + ${card.offsetPx}px)) rotate(${(i % 3) - 1}deg)`,
                 top: 8,
                 display: 'flex',
                 flexDirection: 'column',
@@ -153,14 +142,15 @@ export default function Timeline({
                 zIndex: 2,
               }}
             >
-              {/* Mini card with year */}
+              {/* Mini-Karte im Cassetten-Look */}
               <div
                 style={{
                   width: CARD_WIDTH,
-                  borderRadius: 8,
-                  border: `1px solid ${card.isCorrect ? 'rgba(6,214,160,0.5)' : 'rgba(168,85,247,0.35)'}`,
-                  background: '#13121f',
+                  borderRadius: 10,
+                  border: `1px solid ${card.isCorrect ? 'rgba(30,215,96,0.55)' : 'var(--line-strong)'}`,
+                  background: 'var(--bg-3)',
                   overflow: 'hidden',
+                  boxShadow: '0 6px 16px rgba(0,0,0,0.45)',
                 }}
               >
                 <div
@@ -169,17 +159,17 @@ export default function Timeline({
                     display: 'grid',
                     placeItems: 'center',
                     background: card.isCorrect
-                      ? 'rgba(6,214,160,0.08)'
-                      : 'rgba(168,85,247,0.08)',
+                      ? 'rgba(30,215,96,0.1)'
+                      : 'rgba(139,92,246,0.12)',
                   }}
                 >
                   <span style={{ fontSize: 18 }}>{card.emoji || '🎵'}</span>
                 </div>
                 <div style={{ padding: '3px 5px', textAlign: 'center' }}>
                   <div style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: '0.62rem',
-                    color: '#8b7fb8',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '0.6rem',
+                    color: 'var(--muted)',
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -187,10 +177,10 @@ export default function Timeline({
                     {card.title || ''}
                   </div>
                   <div style={{
-                    fontFamily: "'JetBrains Mono', monospace",
+                    fontFamily: 'var(--font-display)',
+                    fontWeight: 700,
                     fontSize: '0.72rem',
-                    color: card.isCorrect ? '#06d6a0' : '#a855f7',
-                    fontWeight: 600,
+                    color: card.isCorrect ? 'var(--green)' : 'var(--ink)',
                   }}>
                     {card.year}
                   </div>
@@ -204,24 +194,25 @@ export default function Timeline({
       {/* Track */}
       <div
         ref={trackRef}
+        className="timeline-track"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerUp}
         style={{
           position: 'relative',
-          height: 14,
-          borderRadius: 7,
+          height: 16,
+          borderRadius: 8,
           cursor: 'pointer',
           userSelect: 'none',
-          background: 'rgba(168,85,247,0.15)',
-          border: '1px solid rgba(168,85,247,0.3)',
+          background: 'rgba(244, 241, 255, 0.07)',
+          border: '1px solid var(--line-strong)',
           zIndex: 2,
           marginTop: -6,
           touchAction: 'none',
         }}
       >
-        {/* Fill */}
+        {/* Füllung */}
         <div
           style={{
             position: 'absolute',
@@ -229,26 +220,44 @@ export default function Timeline({
             left: 0,
             height: '100%',
             width: `${yearToPercent(value)}%`,
-            borderRadius: 7,
-            background: 'linear-gradient(90deg, #7c3aed, #a855f7)',
+            borderRadius: 8,
+            background: 'linear-gradient(90deg, var(--violet), var(--pink), var(--lime))',
             pointerEvents: 'none',
           }}
         />
 
+        {/* Dekaden-Ticks im Track */}
+        {decadeMarks.map((d) => (
+          <div
+            key={d}
+            style={{
+              position: 'absolute',
+              top: '20%',
+              bottom: '20%',
+              left: `${yearToPercent(d)}%`,
+              width: 1,
+              background: 'rgba(11,10,18,0.5)',
+              pointerEvents: 'none',
+            }}
+          />
+        ))}
+
         {/* Thumb */}
         <div
+          className="timeline-thumb"
           style={{
             position: 'absolute',
             top: '50%',
             left: `${yearToPercent(value)}%`,
             transform: 'translate(-50%, -50%)',
-            width: 28,
-            height: 28,
+            width: 30,
+            height: 30,
             borderRadius: '50%',
-            background: '#a855f7',
+            background: 'var(--lime)',
+            border: '3px solid #0b0a12',
             boxShadow: dragging
-              ? '0 0 28px rgba(168,85,247,1)'
-              : '0 0 16px rgba(168,85,247,0.7)',
+              ? '0 0 0 6px rgba(214,245,69,0.25), 0 0 28px rgba(214,245,69,0.8)'
+              : '0 0 0 3px rgba(214,245,69,0.18), 0 0 14px rgba(214,245,69,0.5)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -257,10 +266,10 @@ export default function Timeline({
             zIndex: 3,
           }}
         >
-          <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'white' }} />
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#0b0a12' }} />
         </div>
 
-        {/* Current dot */}
+        {/* Live-Position (Zuschauer) */}
         {currentDotYear !== undefined && (
           <div
             style={{
@@ -270,10 +279,10 @@ export default function Timeline({
               width: 10,
               height: 10,
               borderRadius: '50%',
-              background: '#f72585',
+              background: 'var(--pink)',
               border: '2px solid white',
               transform: 'translate(-50%, -50%)',
-              boxShadow: '0 0 10px rgba(247,37,133,0.6)',
+              boxShadow: '0 0 10px rgba(255,79,163,0.7)',
               pointerEvents: 'none',
               zIndex: 4,
               transition: 'left 0.4s cubic-bezier(.34,1.2,.64,1)',
@@ -282,8 +291,8 @@ export default function Timeline({
         )}
       </div>
 
-      {/* Decade marks */}
-      <div style={{ position: 'relative', height: 26, marginTop: 4 }}>
+      {/* Dekaden-Beschriftung */}
+      <div style={{ position: 'relative', height: 26, marginTop: 6 }}>
         {decadeMarks.map((d) => (
           <div
             key={d}
@@ -296,16 +305,16 @@ export default function Timeline({
               alignItems: 'center',
             }}
           >
-            <div style={{ width: 1, height: 5, background: 'rgba(168,85,247,0.35)' }} />
+            <div style={{ width: 1, height: 5, background: 'var(--line-strong)' }} />
             <span
               style={{
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: 'var(--font-mono)',
                 fontSize: '0.6rem',
-                color: '#6a5f8a',
+                color: 'var(--dim)',
                 marginTop: 2,
               }}
             >
-              {d}
+              {`'${String(d).slice(2)}`}
             </span>
           </div>
         ))}
@@ -315,12 +324,14 @@ export default function Timeline({
         style={{
           textAlign: 'center',
           padding: 6,
-          color: dragging ? '#a855f7' : '#6a5f8a',
-          fontSize: '0.75rem',
-          fontFamily: "'JetBrains Mono', monospace",
+          color: dragging ? 'var(--lime)' : 'var(--dim)',
+          fontSize: '0.72rem',
+          fontFamily: 'var(--font-mono)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.08em',
         }}
       >
-        {dragging ? '🎯 Loslassen zum Platzieren' : '↕ Ziehe den Regler oder klicke auf die Timeline'}
+        {dragging ? '● Loslassen zum Platzieren' : 'Regler ziehen oder Timeline antippen'}
       </div>
     </div>
   );
