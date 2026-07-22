@@ -453,6 +453,89 @@ html, body {
   .grid-2 { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* ─── Warteraum: Desktop-Dashboard ───
+   Mobil bleibt .lobby-room eine gestapelte Flex-Spalte (identisch zum
+   bisherigen Verhalten). Ab 1024px wird daraus ein zweispaltiges Dashboard:
+   links kompakt (Game-Code + Line-up), rechts breiter (Kategorie + Regeln).
+   Die beiden Spalten fließen unabhängig, damit unterschiedlich hohe Karten
+   keine ausgefransten Lücken hinterlassen. */
+
+.lobby-page {
+  min-height: 100vh;
+  padding: 0 16px 48px;
+  position: relative;
+  z-index: 1;
+}
+
+.lobby-room {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  margin-top: 22px;
+}
+
+.lobby-section {
+  width: 100%;
+  max-width: 400px;
+}
+
+/* Die Spalten-Wrapper sind mobil per display:contents unsichtbar — die
+   Sektionen stapeln sich dann exakt wie zuvor. Erst ab Desktop werden
+   daraus echte Spalten (siehe Media-Query). */
+.lobby-cols,
+.lobby-col {
+  display: contents;
+}
+
+@media (min-width: 1024px) {
+  .lobby-room {
+    align-items: stretch;
+    gap: 26px;
+    max-width: 1080px;
+    margin: 10px auto 0;
+  }
+  .lobby-section { max-width: none; }
+  .lobby-head { margin-top: 0 !important; }
+
+  /* Zwei Spalten nebeneinander; jede Spalte ist ein eigener Flex-Stack und
+     fließt unabhängig von der anderen. */
+  .lobby-cols {
+    display: grid;
+    grid-template-columns: minmax(340px, 400px) minmax(0, 1fr);
+    gap: 26px;
+    align-items: start;
+  }
+  .lobby-col {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    min-width: 0;
+  }
+
+  /* Regeln als 2x2-Raster — in der breiteren rechten Spalte gut ausbalanciert */
+  .lobby-rules-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .lobby-actions {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+    max-width: 560px;
+    margin: 0 auto;
+  }
+  .lobby-actions > button {
+    flex: 1;
+    margin-top: 0 !important; /* der "Lobby verlassen"-Button hat inline marginTop fürs Mobile-Stacking */
+  }
+  .lobby-error {
+    width: 100%;
+    max-width: 560px;
+    margin: 0 auto;
+  }
+}
+
 /* ─── Game HUD ─── */
 
 @media (max-width: 480px) {

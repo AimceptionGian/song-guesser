@@ -416,17 +416,19 @@ export default function LobbyScreen() {
       : { totalRounds: 5, maxPoints: 4, yearRange: 64, playerCount: 0 };
 
   // ─── Lobby Waiting Room ───
+  // Mobil: eine gestapelte Flex-Spalte (unverändert). Ab Desktop-Breite
+  // wird daraus ein zweispaltiges Dashboard — die .lobby-cols/.lobby-col-
+  // Wrapper sind mobil per display:contents unsichtbar (siehe global.css),
+  // sodass sich am Mobile-Layout nichts ändert.
   if (phase === 'lobby') {
     return (
-      <div style={{
-        display: 'flex', flexDirection: 'column', alignItems: 'center',
-        minHeight: '100vh', padding: '0 16px 48px', gap: 22,
-        position: 'relative', zIndex: 1,
-      }}>
+      <div className="lobby-page">
         <Ticker text={`GAME ${lobbyCode} · WARTERAUM · CREW SAMMELN ·`} />
 
+        <div className="lobby-room">
+
         {/* Kopf */}
-        <div className="fade-up" style={{ textAlign: 'center', marginTop: 6 }}>
+        <div className="fade-up lobby-head" style={{ textAlign: 'center', marginTop: 6 }}>
           <h1 className="heading-xl" style={{ position: 'relative', display: 'inline-block' }}>
             <span className="outline-text">Warte</span>
             <span style={{ color: 'var(--lime)' }}>raum</span>
@@ -442,12 +444,13 @@ export default function LobbyScreen() {
           </p>
         </div>
 
+        <div className="lobby-cols">
+        <div className="lobby-col lobby-col-left">
+
         {/* Game-Code-Ticket */}
-        <div className="pop-in panel" style={{
+        <div className="pop-in panel lobby-section lobby-code" style={{
           textAlign: 'center',
           padding: '22px 30px',
-          width: '100%',
-          maxWidth: 400,
           overflow: 'hidden',
         }}>
           <div
@@ -489,7 +492,7 @@ export default function LobbyScreen() {
         </div>
 
         {/* Line-up (Spieler) */}
-        <section className="fade-up" style={{ width: '100%', maxWidth: 400, animationDelay: '0.1s' }}>
+        <section className="fade-up lobby-section lobby-lineup" style={{ animationDelay: '0.1s' }}>
           <SectionHeading index="01" title="Line-up" />
           <div className="panel" style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
             {lobbyPlayers.length === 0 ? (
@@ -550,9 +553,12 @@ export default function LobbyScreen() {
             )}
           </div>
         </section>
+        </div>
+
+        <div className="lobby-col lobby-col-right">
 
         {/* Kategorie */}
-        <section className="fade-up" style={{ width: '100%', maxWidth: 400, animationDelay: '0.14s' }}>
+        <section className="fade-up lobby-section lobby-category" style={{ animationDelay: '0.14s' }}>
           <SectionHeading index="02" title={isHost ? 'Kategorie wählen' : 'Kategorie'} />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             {categories.map((cat, idx) => {
@@ -627,9 +633,9 @@ export default function LobbyScreen() {
         </section>
 
         {/* Regeln */}
-        <section className="fade-up" style={{ width: '100%', maxWidth: 400, animationDelay: '0.18s' }}>
+        <section className="fade-up lobby-section lobby-rules" style={{ animationDelay: '0.18s' }}>
           <SectionHeading index="03" title={isHost ? 'Regeln' : 'Regeln (nur Host)'} />
-          <div style={{ display: 'grid', gap: 10 }}>
+          <div className="lobby-rules-grid" style={{ display: 'grid', gap: 10 }}>
 
             {/* Karten pro Spieler */}
             <div style={settingRowStyle}>
@@ -738,9 +744,11 @@ export default function LobbyScreen() {
             </div>
           </div>
         </section>
+        </div>
+        </div>
 
         {/* Aktionen */}
-        <div className="fade-up" style={{ width: '100%', maxWidth: 400, animationDelay: '0.25s' }}>
+        <div className="fade-up lobby-section lobby-actions" style={{ animationDelay: '0.25s' }}>
           {isHost ? (
             <>
               <button onClick={handleStartGame} disabled={loading} className="btn-primary">
@@ -765,7 +773,8 @@ export default function LobbyScreen() {
           )}
         </div>
 
-        {error && <div className="error-banner" style={{ maxWidth: 400, width: '100%' }}>{error}</div>}
+        {error && <div className="error-banner lobby-section lobby-error">{error}</div>}
+        </div>
       </div>
     );
   }
