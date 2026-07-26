@@ -4,6 +4,7 @@ import {
   buildRandomHitsDeck,
   buildHistoryDeck,
   buildDeck,
+  deckSizeFor,
   mergeDeduped,
 } from '../deck-service';
 import { catalogService } from '../catalog-service';
@@ -66,62 +67,38 @@ describe('deck-service', () => {
   });
 
   describe('buildCuratedDecadeCards', () => {
-    it('uses the hardcoded year, not whatever the provider returns', async () => {
-      // 1850 is a year no curated hit can legitimately have — a real hit
-      // year (like 2009) could coincide with the randomly picked song.
-      vi.spyOn(catalogService, 'getProvider').mockReturnValue({
-        name: 'deezer',
-        searchTracks: vi.fn().mockResolvedValue([makeCatalogTrack({ year: 1850, previewUrl: 'https://x/p.mp3' })]),
-        getTrack: vi.fn(),
-        getPreviewUrl: vi.fn(),
-        getChartTracks: vi.fn(),
-      });
-
-      const cards = await buildCuratedDecadeCards(1);
-      expect(cards).toHaveLength(1);
-      // The card's year must be one of our curated ground-truth years,
-      // never the mocked provider year.
+    it('uses the hardcoded ground-truth years', () => {
       const allYears = DECADES.flatMap((d) => DECADE_HITS[d].map((h) => h.year));
-      expect(allYears).toContain(cards[0].year);
-      expect(cards[0].year).not.toBe(1850);
+      for (const card of buildCuratedDecadeCards(12)) {
+        expect(allYears).toContain(card.year);
+      }
     });
 
-    it('drops candidates without a preview URL', async () => {
-      vi.spyOn(catalogService, 'getProvider').mockReturnValue({
-        name: 'deezer',
-        searchTracks: vi.fn().mockResolvedValue([makeCatalogTrack({ previewUrl: null })]),
-        getTrack: vi.fn(),
-        getPreviewUrl: vi.fn(),
-        getChartTracks: vi.fn(),
-      });
+    it('costs no provider lookups — previews are resolved at draw time', () => {
+      const getProvider = vi.spyOn(catalogService, 'getProvider');
+      const cards = buildCuratedDecadeCards(20);
 
-      const cards = await buildCuratedDecadeCards(5);
-      expect(cards).toEqual([]);
+      expect(cards).toHaveLength(20);
+      expect(cards.every((c) => c.previewUrl === undefined)).toBe(true);
+      expect(getProvider).not.toHaveBeenCalled();
     });
 
-    it('never exceeds the requested target count', async () => {
-      vi.spyOn(catalogService, 'getProvider').mockReturnValue({
-        name: 'deezer',
-        searchTracks: vi.fn().mockResolvedValue([makeCatalogTrack({ previewUrl: 'https://x/p.mp3' })]),
-        getTrack: vi.fn(),
-        getPreviewUrl: vi.fn(),
-        getChartTracks: vi.fn(),
-      });
-
-      const cards = await buildCuratedDecadeCards(7);
-      expect(cards.length).toBeLessThanOrEqual(7);
+    it('never exceeds the requested target count', () => {
+      expect(buildCuratedDecadeCards(7).length).toBeLessThanOrEqual(7);
     });
 
-    it('caps lookup attempts so a run of misses cannot exhaust the subrequest budget', async () => {
-      const searchTracks = vi.fn().mockResolvedValue([makeCatalogTrack({ previewUrl: null })]);
-      vi.spyOn(catalogService, 'getProvider').mockReturnValue({
-        name: 'deezer', searchTracks, getTrack: vi.fn(), getPreviewUrl: vi.fn(), getChartTracks: vi.fn(),
-      });
+    it('spreads picks across decades instead of draining one', () => {
+      // One card per decade is available before any decade gets a second one
+      const cards = buildCuratedDecadeCards(DECADES.length);
+      const decades = new Set(
+        cards.map((c) => `${Math.floor(c.year / 10) * 10}s`)
+      );
+      expect(decades.size).toBe(DECADES.length);
+    });
 
-      await buildCuratedDecadeCards(30);
-      // CURATED_MAX_ATTEMPTS is 32 — every candidate misses, so we should
-      // stop there instead of exhausting all ~60 curated candidates.
-      expect(searchTracks.mock.calls.length).toBeLessThanOrEqual(32);
+    it('stops when every curated hit is used up', () => {
+      const total = DECADES.reduce((n, d) => n + DECADE_HITS[d].length, 0);
+      expect(buildCuratedDecadeCards(total + 50)).toHaveLength(total);
     });
   });
 
@@ -155,11 +132,6 @@ describe('deck-service', () => {
       vi.spyOn(catalogService, 'getChartTracks').mockResolvedValueOnce(
         Array.from({ length: 10 }, (_, i) => makeCatalogTrack({ id: `chart-${i}` }))
       );
-      vi.spyOn(catalogService, 'getProvider').mockReturnValue({
-        name: 'deezer',
-        searchTracks: vi.fn().mockResolvedValue([makeCatalogTrack({ previewUrl: 'https://x/p.mp3' })]),
-        getTrack: vi.fn(), getPreviewUrl: vi.fn(), getChartTracks: vi.fn(),
-      });
 
       const deck = await buildRandomHitsDeck(NO_SPOTIFY_ENV);
       expect(deck).toBeDefined();
@@ -167,16 +139,21 @@ describe('deck-service', () => {
       expect(deck!.some((c) => c.id.startsWith('decade-'))).toBe(true);
     });
 
-    it('returns undefined when both sources come up empty', async () => {
-      vi.spyOn(catalogService, 'getChartTracks').mockResolvedValueOnce([]);
-      vi.spyOn(catalogService, 'getProvider').mockReturnValue({
-        name: 'deezer',
-        searchTracks: vi.fn().mockResolvedValue([]),
-        getTrack: vi.fn(), getPreviewUrl: vi.fn(), getChartTracks: vi.fn(),
-      });
+    it('fills to the requested size even when the chart provider is down', async () => {
+      vi.spyOn(catalogService, 'getChartTracks').mockRejectedValueOnce(new Error('down'));
 
-      const deck = await buildRandomHitsDeck(NO_SPOTIFY_ENV);
-      expect(deck).toBeUndefined();
+      const deck = await buildRandomHitsDeck(NO_SPOTIFY_ENV, 48);
+      expect(deck).toHaveLength(48);
+    });
+
+    it('keeps the handful of chart cards when trimming to deck size', async () => {
+      vi.spyOn(catalogService, 'getChartTracks').mockResolvedValueOnce(
+        Array.from({ length: 10 }, (_, i) => makeCatalogTrack({ id: `chart-${i}` }))
+      );
+
+      const deck = await buildRandomHitsDeck(NO_SPOTIFY_ENV, 20);
+      expect(deck).toHaveLength(20);
+      expect(deck!.filter((c) => c.id.startsWith('chart-')).length).toBeGreaterThan(0);
     });
   });
 
@@ -187,23 +164,40 @@ describe('deck-service', () => {
       expect(deck).toBeUndefined();
     });
 
-    it('drops tracks without a Deezer preview and keeps the rest', async () => {
+    it('builds without provider lookups and carries a search query per card', async () => {
       const tracks = Array.from({ length: 12 }, (_, i) => ({
-        id: `spotify-${i}`, title: `Song ${i}`, artist: 'Artist', playedAt: new Date().toISOString(),
-        source: 'spotify' as const, year: 2000 + i,
+        id: `spotify-${i}`, title: `Song ${i}`, artist: 'Artist One, Artist Two',
+        playedAt: new Date().toISOString(), source: 'spotify' as const, year: 2000 + i,
       }));
       vi.spyOn(historyStore.DurableObjectHistoryStore.prototype, 'getHistories').mockResolvedValueOnce({ p1: tracks });
-      vi.spyOn(catalogService, 'getProvider').mockReturnValue({
-        name: 'deezer',
-        searchTracks: vi.fn()
-          .mockResolvedValueOnce([]) // first track: no preview
-          .mockResolvedValue([makeCatalogTrack({ previewUrl: 'https://x/p.mp3' })]),
-        getTrack: vi.fn(), getPreviewUrl: vi.fn(), getChartTracks: vi.fn(),
-      });
+      const getProvider = vi.spyOn(catalogService, 'getProvider');
 
-      const deck = await buildHistoryDeck(NO_SPOTIFY_ENV, makeLobby({ players: [{ id: 'p1', name: 'A', avatar: '', joinedAt: 0 }] }), 'heard_by_any');
+      const deck = await buildHistoryDeck(
+        NO_SPOTIFY_ENV,
+        makeLobby({ players: [{ id: 'p1', name: 'A', avatar: '', joinedAt: 0 }] }),
+        'heard_by_any'
+      );
+
       expect(deck).toBeDefined();
-      expect(deck!.length).toBeLessThan(tracks.length);
+      expect(deck).toHaveLength(tracks.length);
+      expect(getProvider).not.toHaveBeenCalled();
+      // Multi-artist history strings search with the primary artist only
+      expect(deck![0].previewQuery).toMatch(/^Artist One Song \d+$/);
+    });
+  });
+
+  describe('deckSizeFor', () => {
+    it('covers one card per player per round plus spares', () => {
+      const lobby = makeLobby({
+        players: Array.from({ length: 4 }, (_, i) => ({ id: `p${i}`, name: 'A', avatar: '', joinedAt: 0 })),
+        settings: { ...makeLobby().settings, totalRounds: 10 },
+      });
+      expect(deckSizeFor(lobby)).toBeGreaterThan(4 * 10);
+    });
+
+    it('never drops below a sensible minimum for tiny matches', () => {
+      const lobby = makeLobby({ settings: { ...makeLobby().settings, totalRounds: 3 } });
+      expect(deckSizeFor(lobby)).toBeGreaterThanOrEqual(20);
     });
   });
 

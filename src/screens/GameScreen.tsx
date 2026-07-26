@@ -9,6 +9,11 @@ import { api, getLobbySession, clearLobbySession } from '../services/api-client'
 import { sfx, isSfxMuted, setSfxMuted } from '../services/sfx';
 import type { Song, Player, LiveInput, PlaybackState, RoundReveal, MatchSettings, BuzzerState, VoteState } from '../types';
 
+/** Wie lange das Track-Intro nach dem Laden stehen bleibt (= Dauer der CSS-Animation). */
+const INTRO_REVEAL_MS = 1500;
+/** Notbremse: So lange darf der Ladeschirm höchstens die Bedienung blockieren. */
+const INTRO_LOADING_TIMEOUT_MS = 15000;
+
 /** Backend players carry {card}; the frontend expects {song}. */
 function convertPlayers(state: any): Player[] {
   return ((state?.players ?? []) as any[]).map((p: any) => ({
@@ -53,8 +58,10 @@ export default function GameScreen() {
   const [myVote, setMyVote] = useState<{ artistOk: boolean; titleOk: boolean } | null>(null);
   const [voteSent, setVoteSent] = useState(false);
   const [sfxMuted, setSfxMutedState] = useState(isSfxMuted);
-  // Track-Intro-Overlay: Nummer des Tracks, der gerade eingeblendet wird
-  const [introRound, setIntroRound] = useState<number | null>(null);
+  // Track-Intro-Overlay. Es dient zugleich als Ladeschirm: Ab dem Klick auf
+  // „Karte ziehen" liegt es über der Seite und blockiert alle Eingaben, bis
+  // der Server die Karte samt frischer Preview-URL geliefert hat.
+  const [intro, setIntro] = useState<{ round: number; loading: boolean } | null>(null);
 
   const currentPlayer = players[currentPlayerIndex] || players[0];
   const speakMode = settings?.guessMode === 'speak';
@@ -257,11 +264,16 @@ export default function GameScreen() {
     if (prev === phase) return;
 
     if (phase === 'guessing') {
-      // Neue Karte liegt auf dem Tisch: Intro einblenden + Vinyl-Anlauf
+      // Karte ist da: vom Ladezustand auf das eigentliche Intro umschalten,
+      // das sich nach seiner Animation selbst ausblendet.
       sfx.draw();
-      setIntroRound(round);
+      setIntro({ round, loading: false });
       if (introTimerRef.current) clearTimeout(introTimerRef.current);
-      introTimerRef.current = setTimeout(() => setIntroRound(null), 1500);
+      introTimerRef.current = setTimeout(() => setIntro(null), INTRO_REVEAL_MS);
+    } else {
+      // Jede andere Phase (z.B. vorzeitiges Spielende) beendet einen noch
+      // laufenden Ladeschirm — sonst bliebe die Seite blockiert.
+      setIntro((cur) => (cur?.loading ? null : cur));
     }
     if (phase === 'round_result' && roundResult) sfx.reveal(roundResult.points);
     if (phase === 'reveal_vote') sfx.click();
@@ -273,6 +285,14 @@ export default function GameScreen() {
   useEffect(() => () => {
     if (introTimerRef.current) clearTimeout(introTimerRef.current);
   }, []);
+
+  // Notbremse für den Ladeschirm: Bleibt die Antwort aus (Netzwerk weg), darf
+  // das Overlay die Seite nicht für immer blockieren.
+  useEffect(() => {
+    if (!intro?.loading) return;
+    const id = setTimeout(() => setIntro(null), INTRO_LOADING_TIMEOUT_MS);
+    return () => clearTimeout(id);
+  }, [intro?.loading]);
 
   // Jemand hat den Buzzer gewonnen
   const prevBuzzWinnerRef = useRef<string | null>(null);
@@ -318,6 +338,9 @@ export default function GameScreen() {
     sfx.click();
     setIsLoading(true);
     setError(null);
+    // Ladeschirm sofort hochziehen: Der Server holt jetzt eine frische
+    // Preview-URL und überspringt dabei ggf. nicht abspielbare Karten.
+    setIntro({ round, loading: true });
 
     try {
       if (!gameStarted) {
@@ -340,6 +363,7 @@ export default function GameScreen() {
     } catch (err) {
       console.error('Draw failed:', err);
       setIsLoading(false);
+      setIntro(null);
       setError('Karte ziehen fehlgeschlagen. Versuche es erneut.');
     }
   }, [round, totalRounds, isLoading, gameCode, gameStarted, syncState, selfId]);
@@ -495,15 +519,23 @@ export default function GameScreen() {
         zIndex: 1,
       }}
     >
-      {/* ─── Track-Intro: kurzer Vollbild-Moment beim Kartenziehen ─── */}
-      {introRound !== null && (
-        <div className="track-intro" aria-hidden>
+      {/* ─── Track-Intro: Vollbild-Moment beim Kartenziehen.
+           Solange geladen wird, bleibt es stehen und schluckt alle Klicks. ─── */}
+      {intro && (
+        <div
+          className={`track-intro${intro.loading ? ' is-loading' : ''}`}
+          role={intro.loading ? 'status' : undefined}
+          aria-live={intro.loading ? 'polite' : undefined}
+          aria-hidden={intro.loading ? undefined : true}
+        >
           <div style={{ textAlign: 'center' }}>
             <div className="track-intro-title">
-              Track {String(Math.min(introRound, totalRounds)).padStart(2, '0')}
+              Track {String(Math.min(intro.round, totalRounds)).padStart(2, '0')}
             </div>
             <div className="track-intro-sub">
-              {isMyTurn ? 'gut zuhören …' : `${activePlayerName} ist dran …`}
+              {intro.loading
+                ? 'wird aufgelegt …'
+                : isMyTurn ? 'gut zuhören …' : `${activePlayerName} ist dran …`}
             </div>
           </div>
         </div>

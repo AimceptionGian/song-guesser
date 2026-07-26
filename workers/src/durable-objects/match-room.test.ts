@@ -64,7 +64,14 @@ vi.mock('../services/scoring-service', () => ({
   isArtistMatch: vi.fn((g: string, t: string) => g.trim().toLowerCase() === t.trim().toLowerCase()),
 }));
 
+// Drawing a card resolves a fresh preview URL over the network — keep that
+// deterministic and offline here. Individual tests override the behaviour.
+vi.mock('../services/preview-service', () => ({
+  resolvePlayableCard: vi.fn(async (card: any) => ({ ...card, previewUrl: 'https://cdn/fresh.mp3' })),
+}));
+
 import { calculateFullScore } from '../services/scoring-service';
+import { resolvePlayableCard } from '../services/preview-service';
 
 /** calculateFullScore result where the guesser missed artist + title. */
 const MISSED_ARTIST_TITLE = {
@@ -327,7 +334,29 @@ describe('MatchRoom Durable Object', () => {
       expect(second.state.deck).toHaveLength(first.state.deck.length);
     });
 
-    it('DECK_EMPTY when deck exhausted', async () => {
+    it('attaches the freshly resolved preview URL to the drawn card', async () => {
+      await cmd(room, 'start_match', startPayload());
+      const data = await cmd(room, 'draw_card');
+      expect(data.state.currentCard.previewUrl).toBe('https://cdn/fresh.mp3');
+    });
+
+    it('skips cards without a playable preview instead of serving a dead card', async () => {
+      vi.mocked(resolvePlayableCard)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockImplementationOnce(async (card: any) => ({ ...card, previewUrl: 'https://cdn/third.mp3' }));
+
+      await cmd(room, 'start_match', startPayload());
+      const before = MOCK_TRACKS.length;
+      const data = await cmd(room, 'draw_card');
+
+      expect(data.accepted).toBe(true);
+      expect(data.state.currentCard.previewUrl).toBe('https://cdn/third.mp3');
+      // Two unplayable cards were discarded along with the one served
+      expect(data.state.deck).toHaveLength(before - 3);
+    });
+
+    it('finishes the match instead of freezing when nothing playable is left', async () => {
       await cmd(room, 'start_match', startPayload([{ id: 'p1', name: 'A', avatar: '' }]));
       for (let i = 0; i < MOCK_TRACKS.length; i++) {
         await cmd(room, 'draw_card');
@@ -337,8 +366,9 @@ describe('MatchRoom Durable Object', () => {
         await cmd(room, 'resolve_turn', { playerId: 'p1' });
       }
       const data = await cmd(room, 'draw_card');
-      expect(data.accepted).toBe(false);
       expect(data.errorCode).toBe('DECK_EMPTY');
+      // Everyone lands on the final screen rather than on a dead draw button
+      expect(data.state.phase).toBe('finished');
     });
   });
 

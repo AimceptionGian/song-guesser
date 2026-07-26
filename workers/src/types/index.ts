@@ -190,9 +190,16 @@ export interface Card {
   year: number;
   genre: string;
   emoji: string;
+  /** Resolved at draw time, not at deck-build time — see preview-service. */
   previewUrl?: string;
   coverUrl?: string;
   gradient: string;
+  /**
+   * Search terms used to resolve the preview when the card is drawn.
+   * Set where `${artist} ${title}` is a poor query (e.g. history tracks
+   * whose artist field lists several artists). Defaults to artist + title.
+   */
+  previewQuery?: string;
 }
 
 export interface PlacedCard {

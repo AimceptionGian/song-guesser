@@ -3,28 +3,25 @@ import { enrichTrackYears } from './spotify-year-service';
 import { buildCategoryPool, getCategoryDefinition, MIN_CATEGORY_POOL, DEFAULT_CATEGORY } from './category-service';
 import { DurableObjectHistoryStore } from '../db/repositories/durable-object-repository';
 import { DECADE_HITS, DECADES } from '../db/decade-hits';
+import type { DecadeHit } from '../db/decade-hits';
 import type { CatalogTrack } from '../adapters/catalog-provider';
 import type { Card, Lobby } from '../types';
 import type { Env } from '../env';
 
-// Deck size: big enough for the default game length (4 players × 5 rounds =
-// 20 draws) with headroom, small enough that chart fetch + Spotify year
-// lookups stay well under the Worker's per-invocation subrequest cap.
-const DECK_SIZE = 30;
+// A deck must outlast the whole match: one card per player per round. Cards
+// whose preview can't be resolved at draw time are skipped, so the deck
+// carries spares on top of the exact requirement.
+const DECK_HEADROOM = 8;
+const MIN_DECK_SIZE = 20;
 
-// History decks are smaller: every track needs its own Deezer preview
-// lookup (one subrequest each), and that budget is capped per invocation.
-const HISTORY_DECK_SIZE = 20;
+// Fallback when the deck is built without a known player count / round count.
+const DEFAULT_DECK_SIZE = 30;
 
 // "Random Hits" blend: a handful of current chart tracks (freshness) plus
-// curated decade classics (variety) — see buildRandomHitsDeck. Every
-// curated lookup and Spotify year lookup costs one subrequest, so the split
-// and the attempt cap are both sized to stay well under the Worker's
-// per-invocation subrequest budget.
+// curated decade classics (variety) — see buildRandomHitsDeck. Chart tracks
+// are the only part that costs subrequests (chart fetch + one Spotify year
+// lookup each), so their share stays small and fixed; curated cards are free.
 const RECENT_CHART_COUNT = 6;
-const CURATED_TARGET = DECK_SIZE - RECENT_CHART_COUNT;
-const CURATED_PER_DECADE = 5;
-const CURATED_MAX_ATTEMPTS = 32;
 
 const CARD_GRADIENT = 'linear-gradient(135deg, #1e1c2e, #13121f)';
 
@@ -85,43 +82,37 @@ export async function fetchRecentChartCards(env: Env, count: number): Promise<Ca
  * Curated decade-spanning classics (1960s–2010s): the year is hardcoded
  * ground truth (see decade-hits.ts) rather than sourced from a provider,
  * since Deezer/iTunes often report compilation/remaster dates for older
- * songs. Only the preview URL and cover art come from Deezer, one lookup
- * per candidate, capped so a run of misses can't exhaust the subrequest
- * budget.
+ * songs.
+ *
+ * Costs no subrequests at all — preview and cover are resolved when the card
+ * is drawn (see preview-service), which is also the only point where a fresh,
+ * non-expired preview URL can be obtained.
+ *
+ * Cards are drawn round-robin across the decades so every decade is
+ * represented even when the target count is small.
  */
-export async function buildCuratedDecadeCards(targetCount: number): Promise<Card[]> {
-  const deezer = catalogService.getProvider('deezer');
+export function buildCuratedDecadeCards(targetCount: number): Card[] {
+  const perDecade = shuffle(DECADES).map((decade) => shuffle(DECADE_HITS[decade]));
   const cards: Card[] = [];
-  let attempts = 0;
 
-  for (const decade of shuffle(DECADES)) {
-    if (cards.length >= targetCount || attempts >= CURATED_MAX_ATTEMPTS) break;
-    let addedForDecade = 0;
+  for (let i = 0; cards.length < targetCount; i++) {
+    const roundPicks = perDecade.map((hits) => hits[i]).filter((h): h is DecadeHit => !!h);
+    if (roundPicks.length === 0) break; // every decade exhausted
 
-    for (const hit of shuffle(DECADE_HITS[decade])) {
-      if (addedForDecade >= CURATED_PER_DECADE || cards.length >= targetCount || attempts >= CURATED_MAX_ATTEMPTS) break;
-      attempts++;
-      try {
-        const matches = await deezer.searchTracks(`${hit.artist} ${hit.title}`, 3);
-        const withPreview = matches.find((m) => m.previewUrl);
-        if (!withPreview) continue;
-        cards.push({
-          id: `decade-${hit.year}-${slugify(hit.artist)}-${slugify(hit.title)}`,
-          title: hit.title,
-          artist: hit.artist,
-          year: hit.year,
-          genre: 'Pop',
-          emoji: '🎵',
-          previewUrl: withPreview.previewUrl ?? undefined,
-          coverUrl: withPreview.coverUrl ?? undefined,
-          gradient: CARD_GRADIENT,
-        });
-        addedForDecade++;
-      } catch {
-        // try the next candidate
-      }
+    for (const hit of roundPicks) {
+      if (cards.length >= targetCount) break;
+      cards.push({
+        id: `decade-${hit.year}-${slugify(hit.artist)}-${slugify(hit.title)}`,
+        title: hit.title,
+        artist: hit.artist,
+        year: hit.year,
+        genre: 'Pop',
+        emoji: '🎵',
+        gradient: CARD_GRADIENT,
+      });
     }
   }
+
   return cards;
 }
 
@@ -152,24 +143,36 @@ export function mergeDeduped(preferred: Card[], other: Card[]): Card[] {
  * spanning every decade from the 1960s to the 2010s, so the category isn't
  * dominated by whatever happens to be on the charts right now.
  */
-export async function buildRandomHitsDeck(env: Env): Promise<Card[] | undefined> {
-  const [recent, curated] = await Promise.all([
-    fetchRecentChartCards(env, RECENT_CHART_COUNT),
-    buildCuratedDecadeCards(CURATED_TARGET),
-  ]);
+export async function buildRandomHitsDeck(env: Env, deckSize = DEFAULT_DECK_SIZE): Promise<Card[] | undefined> {
+  const recent = await fetchRecentChartCards(env, Math.min(RECENT_CHART_COUNT, deckSize));
+  // Curated cards are free to build, so over-provision and let them fill
+  // whatever the chart didn't deliver: a failing chart provider then costs
+  // variety, never deck size.
+  const curated = buildCuratedDecadeCards(deckSize);
+  const merged = mergeDeduped(curated, recent);
 
-  const combined = shuffle(mergeDeduped(curated, recent));
+  // Chart cards go in first so trimming to deckSize can't drop the handful of
+  // recent hits; the final shuffle spreads them through the deck again.
+  const isCurated = (c: Card) => c.id.startsWith('decade-');
+  const ordered = [...merged.filter((c) => !isCurated(c)), ...merged.filter(isCurated)];
+
+  const combined = shuffle(ordered.slice(0, deckSize));
   return combined.length > 0 ? combined : undefined;
 }
 
 /**
  * History-based deck: pool from the players' synced Spotify histories
- * (release years come with the history data), previews looked up on Deezer.
- * Tracks without a findable preview are dropped — a guessing game without
- * audio is pointless. Returns undefined when the pool is too small, so the
- * caller can fall back to the random-hits deck.
+ * (release years come with the history data). Previews are resolved per card
+ * at draw time, so building this deck costs no lookups — tracks Deezer can't
+ * match are skipped when they come up. Returns undefined when the pool is too
+ * small, so the caller can fall back to the random-hits deck.
  */
-export async function buildHistoryDeck(env: Env, lobby: Lobby, category: string): Promise<Card[] | undefined> {
+export async function buildHistoryDeck(
+  env: Env,
+  lobby: Lobby,
+  category: string,
+  deckSize = DEFAULT_DECK_SIZE
+): Promise<Card[] | undefined> {
   const histories = await new DurableObjectHistoryStore(env).getHistories(lobby.id);
   const pool = buildCategoryPool(category, histories, lobby.players.map((p) => p.id));
 
@@ -178,46 +181,26 @@ export async function buildHistoryDeck(env: Env, lobby: Lobby, category: string)
     return undefined;
   }
 
-  const deezer = catalogService.getProvider('deezer');
-  const picked = shuffle(pool).slice(0, HISTORY_DECK_SIZE);
+  return shuffle(pool).slice(0, deckSize).map((t): Card => ({
+    id: t.id,
+    title: t.title,
+    artist: t.artist,
+    year: t.year ?? 2000,
+    genre: 'Pop',
+    emoji: '🎵',
+    gradient: CARD_GRADIENT,
+    // History artist strings can list several artists — search with the first
+    previewQuery: `${t.artist.split(',')[0].trim()} ${t.title}`,
+  }));
+}
 
-  const cards = await Promise.all(
-    picked.map(async (t): Promise<Card | null> => {
-      // History artist strings can list several artists — search with the first
-      const primaryArtist = t.artist.split(',')[0].trim();
-      let previewUrl: string | undefined;
-      let coverUrl: string | undefined;
-      try {
-        const matches = await deezer.searchTracks(`${primaryArtist} ${t.title}`, 1);
-        if (matches[0]?.previewUrl) {
-          previewUrl = matches[0].previewUrl;
-          coverUrl = matches[0].coverUrl ?? undefined;
-        }
-      } catch {
-        // no preview — track gets dropped below
-      }
-      if (!previewUrl) return null;
-
-      return {
-        id: t.id,
-        title: t.title,
-        artist: t.artist,
-        year: t.year ?? 2000,
-        genre: 'Pop',
-        emoji: '🎵',
-        previewUrl,
-        coverUrl,
-        gradient: CARD_GRADIENT,
-      };
-    })
-  );
-
-  const deck = cards.filter((c): c is Card => c !== null);
-  if (deck.length < MIN_CATEGORY_POOL) {
-    console.warn(`[buildHistoryDeck] only ${deck.length} tracks with previews for "${category}"`);
-    return undefined;
-  }
-  return deck;
+/**
+ * How many cards a match needs: one per player per round, plus spares for
+ * cards whose preview can't be resolved when they're drawn.
+ */
+export function deckSizeFor(lobby: Lobby): number {
+  const draws = Math.max(1, lobby.players.length) * Math.max(1, lobby.settings.totalRounds);
+  return Math.max(MIN_DECK_SIZE, draws + DECK_HEADROOM);
 }
 
 /**
@@ -228,12 +211,13 @@ export async function buildHistoryDeck(env: Env, lobby: Lobby, category: string)
 export async function buildDeck(env: Env, lobby: Lobby): Promise<Card[] | undefined> {
   const category = lobby.category ?? DEFAULT_CATEGORY;
   const def = getCategoryDefinition(category);
+  const size = deckSizeFor(lobby);
 
   if (def?.requiresHistory) {
-    const deck = await buildHistoryDeck(env, lobby, category);
+    const deck = await buildHistoryDeck(env, lobby, category, size);
     if (deck) return deck;
     console.warn(`[buildDeck] falling back to random-hits deck for category "${category}"`);
   }
 
-  return buildRandomHitsDeck(env);
+  return buildRandomHitsDeck(env, size);
 }

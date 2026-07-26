@@ -104,9 +104,14 @@ export default function AudioPlayer({
   const lastVolumeRef = useRef(volume > 0 ? volume : 0.8);
   // Spectator: browser blocked autoplay — needs one tap to unlock audio
   const [needsGesture, setNeedsGesture] = useState(false);
+  // Preview-URL, die sich nicht laden liess (z.B. abgelaufener CDN-Token)
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
 
-  // Use previewUrl if available, otherwise use generated fallback tone
-  const effectiveUrl = previewUrl || getFallbackUrl();
+  // Use previewUrl if available, otherwise use generated fallback tone.
+  // A URL that failed to load also falls back — better a placeholder tone
+  // than a play button that silently does nothing.
+  const usableUrl = previewUrl && previewUrl !== failedUrl ? previewUrl : undefined;
+  const effectiveUrl = usableUrl || getFallbackUrl();
   const noAudio = !effectiveUrl;
 
   // Create or reuse audio element
@@ -139,6 +144,8 @@ export default function AudioPlayer({
     const onError = () => {
       setHasError(true);
       setIsPlaying(false);
+      // Merken, damit der Effekt neu läuft und auf den Ersatzton umschaltet
+      if (usableUrl) setFailedUrl(usableUrl);
     };
 
     audio.addEventListener('timeupdate', onTimeUpdate);
@@ -154,7 +161,7 @@ export default function AudioPlayer({
       audio.removeEventListener('error', onError);
       audioRef.current = null;
     };
-  }, [effectiveUrl]);
+  }, [effectiveUrl, usableUrl]);
 
   // Apply volume to the (possibly recreated) audio element and persist it
   useEffect(() => {

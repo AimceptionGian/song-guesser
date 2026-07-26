@@ -267,11 +267,17 @@ api.post('/games/:code/start', async (c) => {
   const lobby = await getLobbyByCode(code);
   if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
 
-  // Pre-seed the deck for the lobby's selected category
-  const deck = await buildDeck(c.env, lobby);
+  // The lobby start already seeded a deck in the common flow. Rebuilding it
+  // here would throw that deck away and re-run every provider lookup, so only
+  // build when nothing is seeded (solo / direct-URL entry, or an evicted DO).
+  const info = await sendToDO(c.env, lobby.id, 'deck-info', undefined, 'GET')
+    .then((res) => res.json() as Promise<{ seeded: number; matchStarted: boolean }>)
+    .catch(() => ({ seeded: 0, matchStarted: false }));
 
-  // Init deck
-  await sendToDO(c.env, lobby.id, 'init-deck', { deck });
+  if (!info.seeded && !info.matchStarted) {
+    const deck = await buildDeck(c.env, lobby);
+    await sendToDO(c.env, lobby.id, 'init-deck', { deck });
+  }
 
   // Start match. The buzzer only makes sense when a time limit exists and
   // answers are typed (auto-graded) — enforced here in one place.

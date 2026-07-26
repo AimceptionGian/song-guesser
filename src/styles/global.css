@@ -664,10 +664,31 @@ html, body {
   z-index: 60;
   display: grid;
   place-items: center;
-  pointer-events: none;
+  /* Fängt alle Klicks ab: Während Intro/Ladevorgang ist nichts bedienbar. */
+  pointer-events: auto;
   background: rgba(11, 10, 18, 0.82);
   backdrop-filter: blur(5px);
   animation: introBackdrop 1.5s ease forwards;
+}
+
+/* Ladezustand: bleibt stehen, bis die Karte da ist — kein Ausblenden. */
+.track-intro.is-loading {
+  animation: none;
+  opacity: 1;
+}
+.track-intro.is-loading .track-intro-title {
+  animation: introTitleIn 0.5s cubic-bezier(.2, .9, .3, 1.15) forwards;
+}
+.track-intro.is-loading .track-intro-sub {
+  animation: introPulse 1.2s ease-in-out infinite;
+}
+@keyframes introTitleIn {
+  0% { opacity: 0; transform: scale(2.4) rotate(5deg); }
+  100% { opacity: 1; transform: scale(1) rotate(-1.5deg); }
+}
+@keyframes introPulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
 }
 @keyframes introBackdrop {
   0% { opacity: 0; }

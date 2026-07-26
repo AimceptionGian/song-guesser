@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { MatchState, MatchPlayer, MatchSettings, Card, CommandEnvelope, ResponseEnvelope, CommandType, LiveInput, PlaybackState } from '../types';
 import { MOCK_TRACKS, shuffleArray } from '../db/mock-data';
 import { calculateFullScore, isCloseMatch, isArtistMatch } from '../services/scoring-service';
+import { resolvePlayableCard } from '../services/preview-service';
 import type { GuessSubmission } from '../types';
 import type { Env } from '../env';
 
@@ -13,6 +14,9 @@ const BUZZ_WINDOW_MS = 10_000;   // how long players may buzz after the timeout
 const BUZZ_ANSWER_MS = 15_000;   // how long the buzzer winner may answer
 const VOTE_WINDOW_MS = 45_000;   // how long the reveal vote stays open
 const FALLBACK_GUESS_YEAR = 1992; // matches the frontend's initial slider position
+// How many cards a single draw may burn looking for a playable preview.
+// Each attempt is one lookup, so this also bounds the draw's latency.
+const MAX_DRAW_ATTEMPTS = 4;
 
 const DEFAULT_MATCH_SETTINGS: MatchSettings = {
   guessMode: 'type',
@@ -53,6 +57,10 @@ export class MatchRoom extends DurableObject {
         this.state = saved;
         this.version = saved.version;
       }
+      // The deck is seeded before start_match arrives; persisting it means an
+      // eviction in between can't silently drop the match back to MOCK_TRACKS.
+      const deck = await ctx.storage.get<Card[]>('seeded-deck');
+      if (deck?.length) this.seededDeck = deck;
     });
   }
 
@@ -77,8 +85,19 @@ export class MatchRoom extends DurableObject {
       const { deck } = (await request.json()) as { deck: Card[] };
       if (deck && deck.length > 0) {
         this.seededDeck = deck;
+        await this.storage.put('seeded-deck', deck);
       }
       return Response.json({ accepted: true, count: deck?.length ?? 0 });
+    }
+
+    // Lets the start route skip a redundant deck build when one is already
+    // seeded (the lobby start and the first draw both used to build one).
+    if (request.url.endsWith('/deck-info') && request.method === 'GET') {
+      return Response.json({
+        seeded: this.seededDeck?.length ?? 0,
+        matchStarted: !!this.state,
+        remaining: this.state?.deck.length ?? 0,
+      });
     }
 
     // HTTP command endpoint (REST fallback for unreliable WS)
@@ -294,7 +313,7 @@ export class MatchRoom extends DurableObject {
     };
   }
 
-  private drawCard(command: CommandEnvelope): ResponseEnvelope {
+  private async drawCard(command: CommandEnvelope): Promise<ResponseEnvelope> {
     if (!this.state) {
       return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NO_MATCH' };
     }
@@ -318,9 +337,30 @@ export class MatchRoom extends DurableObject {
       };
     }
 
-    const card = this.state.deck.pop();
+    // Preview URLs expire (Deezer signs them for 15 minutes), so they are
+    // resolved now rather than at deck-build time. A card we can't get audio
+    // for is silently discarded and the next one is drawn — the players never
+    // see a dead card, only the draw taking a moment longer.
+    let card: Card | null = null;
+    for (let attempt = 0; attempt < MAX_DRAW_ATTEMPTS; attempt++) {
+      const candidate = this.state.deck.pop();
+      if (!candidate) break;
+
+      card = await resolvePlayableCard(candidate);
+      if (card) break;
+
+      console.warn(`[MatchRoom] no playable preview for "${candidate.artist} – ${candidate.title}", skipping`);
+    }
+
     if (!card) {
-      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'DECK_EMPTY' };
+      // Nothing playable left. Ending the match beats freezing on a draw
+      // button that can never succeed — everyone lands on the final screen.
+      console.warn('[MatchRoom] deck exhausted — finishing match early');
+      this.state.phase = 'finished';
+      this.state.currentCard = null;
+      this.state.version = ++this.version;
+      this.persistState();
+      return { accepted: false, newVersion: this.version, stateDelta: { phase: 'finished' }, errorCode: 'DECK_EMPTY' };
     }
 
     this.state.currentCard = card;
