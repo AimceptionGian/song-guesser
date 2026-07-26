@@ -658,44 +658,45 @@ html, body {
 
 /* ─── Track-Intro-Interstitial (beim Kartenziehen) ─── */
 
+/* Ein einziges Overlay für Ladevorgang und Track-Intro: Es geht beim Klick
+   auf „Karte ziehen" hoch, blockiert bis zum Ende jede Eingabe und zeigt die
+   Track-Nummer, sobald die Karte da ist. Der Vorhang selbst blendet per
+   Transition ein/aus statt per Animation — so kann der Wechsel vom Lade- in
+   den Anzeigezustand nichts ein zweites Mal starten. */
 .track-intro {
   position: fixed;
   inset: 0;
   z-index: 60;
   display: grid;
   place-items: center;
-  /* Fängt alle Klicks ab: Während Intro/Ladevorgang ist nichts bedienbar. */
+  /* Fängt alle Klicks ab: Während Ladevorgang und Intro ist nichts bedienbar. */
   pointer-events: auto;
   background: rgba(11, 10, 18, 0.82);
   backdrop-filter: blur(5px);
-  animation: introBackdrop 1.5s ease forwards;
+  opacity: 1;
+  transition: opacity 0.35s ease;
+}
+.track-intro.is-leaving {
+  opacity: 0;
 }
 
-/* Ladezustand: bleibt stehen, bis die Karte da ist — kein Ausblenden. */
-.track-intro.is-loading {
-  animation: none;
-  opacity: 1;
-}
-.track-intro.is-loading .track-intro-title {
-  animation: introTitleIn 0.5s cubic-bezier(.2, .9, .3, 1.15) forwards;
-}
-.track-intro.is-loading .track-intro-sub {
-  animation: introPulse 1.2s ease-in-out infinite;
-}
-@keyframes introTitleIn {
-  0% { opacity: 0; transform: scale(2.4) rotate(5deg); }
-  100% { opacity: 1; transform: scale(1) rotate(-1.5deg); }
+/* Der Ladehinweis erscheint erst nach 400 ms. Ein schnelles Ziehen zeigt
+   damit nur ein kurzes Abdunkeln statt eines aufblitzenden Textes. */
+.track-intro-hint {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: clamp(1rem, 4vw, 1.4rem);
+  color: var(--muted);
+  opacity: 0;
+  animation: introPulse 1.2s ease-in-out 0.4s infinite;
 }
 @keyframes introPulse {
-  0%, 100% { opacity: 0.45; }
+  0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }
 }
-@keyframes introBackdrop {
-  0% { opacity: 0; }
-  12% { opacity: 1; }
-  78% { opacity: 1; }
-  100% { opacity: 0; }
-}
+
+/* Fliegt genau einmal ein und bleibt stehen — das Ausblenden übernimmt der
+   Vorhang. */
 .track-intro-title {
   font-family: var(--font-display);
   font-weight: 900;
@@ -704,13 +705,11 @@ html, body {
   letter-spacing: -0.02em;
   color: var(--lime);
   text-shadow: 6px 6px 0 rgba(255, 79, 163, 0.55);
-  animation: introTitle 1.5s cubic-bezier(.2,.9,.3,1.15) forwards;
+  animation: introTitle 0.5s cubic-bezier(.2,.9,.3,1.15) forwards;
 }
 @keyframes introTitle {
   0% { opacity: 0; transform: scale(2.4) rotate(5deg); }
-  20% { opacity: 1; transform: scale(1) rotate(-1.5deg); }
-  74% { opacity: 1; transform: scale(1.04) rotate(-1.5deg); }
-  100% { opacity: 0; transform: scale(1.1) rotate(-1.5deg); }
+  100% { opacity: 1; transform: scale(1) rotate(-1.5deg); }
 }
 .track-intro-sub {
   font-family: var(--font-serif);
@@ -719,7 +718,11 @@ html, body {
   color: var(--muted);
   text-align: center;
   margin-top: 8px;
-  animation: introBackdrop 1.5s ease forwards;
+  opacity: 0;
+  animation: introSubIn 0.35s ease 0.18s forwards;
+}
+@keyframes introSubIn {
+  to { opacity: 1; }
 }
 
 /* ─── Icon-Button (Mute etc.) ─── */

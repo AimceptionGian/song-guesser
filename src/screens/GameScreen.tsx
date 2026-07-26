@@ -9,10 +9,19 @@ import { api, getLobbySession, clearLobbySession } from '../services/api-client'
 import { sfx, isSfxMuted, setSfxMuted } from '../services/sfx';
 import type { Song, Player, LiveInput, PlaybackState, RoundReveal, MatchSettings, BuzzerState, VoteState } from '../types';
 
-/** Wie lange das Track-Intro nach dem Laden stehen bleibt (= Dauer der CSS-Animation). */
-const INTRO_REVEAL_MS = 1500;
-/** Notbremse: So lange darf der Ladeschirm höchstens die Bedienung blockieren. */
+/** Wie lange die Track-Nummer stehen bleibt, bevor der Vorhang aufgeht. */
+const INTRO_HOLD_MS = 1100;
+/** Dauer des Ausblendens (muss zur CSS-Transition von .track-intro passen). */
+const INTRO_FADE_MS = 350;
+/** Notbremse: So lange darf der Ladevorhang höchstens die Bedienung blockieren. */
 const INTRO_LOADING_TIMEOUT_MS = 15000;
+
+/**
+ * 'loading'  — Karte wird geholt, nur der abdunkelnde Vorhang steht
+ * 'reveal'   — Karte ist da, die Track-Nummer fliegt einmalig ein
+ * 'leaving'  — Vorhang blendet aus
+ */
+type IntroStage = 'loading' | 'reveal' | 'leaving';
 
 /** Backend players carry {card}; the frontend expects {song}. */
 function convertPlayers(state: any): Player[] {
@@ -61,7 +70,7 @@ export default function GameScreen() {
   // Track-Intro-Overlay. Es dient zugleich als Ladeschirm: Ab dem Klick auf
   // „Karte ziehen" liegt es über der Seite und blockiert alle Eingaben, bis
   // der Server die Karte samt frischer Preview-URL geliefert hat.
-  const [intro, setIntro] = useState<{ round: number; loading: boolean } | null>(null);
+  const [intro, setIntro] = useState<{ round: number; stage: IntroStage } | null>(null);
 
   const currentPlayer = players[currentPlayerIndex] || players[0];
   const speakMode = settings?.guessMode === 'speak';
@@ -254,26 +263,34 @@ export default function GameScreen() {
 
   // ─── Sound + Track-Intro bei Phasenwechseln ───
   const prevPhaseRef = useRef<string>('drawing');
-  // Ausblend-Timer als Ref: Er darf NICHT im Effect-Cleanup gecancelt werden,
-  // sonst bleibt das Overlay hängen, wenn die Phase innerhalb der 1,5s wechselt
-  // (z.B. bei sehr schneller Antwort).
-  const introTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ausblend-Timer als Refs: Sie dürfen NICHT im Effect-Cleanup gecancelt
+  // werden, sonst bleibt das Overlay hängen, wenn die Phase noch während des
+  // Intros wechselt (z.B. bei sehr schneller Antwort).
+  const introTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  const clearIntroTimers = useCallback(() => {
+    introTimersRef.current.forEach(clearTimeout);
+    introTimersRef.current = [];
+  }, []);
+
   useEffect(() => {
     const prev = prevPhaseRef.current;
     prevPhaseRef.current = phase;
     if (prev === phase) return;
 
     if (phase === 'guessing') {
-      // Karte ist da: vom Ladezustand auf das eigentliche Intro umschalten,
-      // das sich nach seiner Animation selbst ausblendet.
+      // Karte ist da: Der Vorhang steht bereits, jetzt fliegt die Track-Nummer
+      // ein — einmalig, weil nur sie neu dazukommt und der Vorhang bleibt.
       sfx.draw();
-      setIntro({ round, loading: false });
-      if (introTimerRef.current) clearTimeout(introTimerRef.current);
-      introTimerRef.current = setTimeout(() => setIntro(null), INTRO_REVEAL_MS);
+      setIntro({ round, stage: 'reveal' });
+      clearIntroTimers();
+      introTimersRef.current = [
+        setTimeout(() => setIntro((cur) => (cur ? { ...cur, stage: 'leaving' } : null)), INTRO_HOLD_MS),
+        setTimeout(() => setIntro(null), INTRO_HOLD_MS + INTRO_FADE_MS),
+      ];
     } else {
       // Jede andere Phase (z.B. vorzeitiges Spielende) beendet einen noch
-      // laufenden Ladeschirm — sonst bliebe die Seite blockiert.
-      setIntro((cur) => (cur?.loading ? null : cur));
+      // laufenden Ladevorgang — sonst bliebe die Seite blockiert.
+      setIntro((cur) => (cur?.stage === 'loading' ? null : cur));
     }
     if (phase === 'round_result' && roundResult) sfx.reveal(roundResult.points);
     if (phase === 'reveal_vote') sfx.click();
@@ -282,17 +299,15 @@ export default function GameScreen() {
   }, [phase]);
 
   // Intro-Timer nur beim Unmount aufräumen
-  useEffect(() => () => {
-    if (introTimerRef.current) clearTimeout(introTimerRef.current);
-  }, []);
+  useEffect(() => clearIntroTimers, [clearIntroTimers]);
 
-  // Notbremse für den Ladeschirm: Bleibt die Antwort aus (Netzwerk weg), darf
+  // Notbremse für den Ladevorhang: Bleibt die Antwort aus (Netzwerk weg), darf
   // das Overlay die Seite nicht für immer blockieren.
   useEffect(() => {
-    if (!intro?.loading) return;
+    if (intro?.stage !== 'loading') return;
     const id = setTimeout(() => setIntro(null), INTRO_LOADING_TIMEOUT_MS);
     return () => clearTimeout(id);
-  }, [intro?.loading]);
+  }, [intro?.stage]);
 
   // Jemand hat den Buzzer gewonnen
   const prevBuzzWinnerRef = useRef<string | null>(null);
@@ -338,9 +353,10 @@ export default function GameScreen() {
     sfx.click();
     setIsLoading(true);
     setError(null);
-    // Ladeschirm sofort hochziehen: Der Server holt jetzt eine frische
+    // Vorhang sofort hochziehen: Der Server holt jetzt eine frische
     // Preview-URL und überspringt dabei ggf. nicht abspielbare Karten.
-    setIntro({ round, loading: true });
+    clearIntroTimers();
+    setIntro({ round, stage: 'loading' });
 
     try {
       if (!gameStarted) {
@@ -519,25 +535,28 @@ export default function GameScreen() {
         zIndex: 1,
       }}
     >
-      {/* ─── Track-Intro: Vollbild-Moment beim Kartenziehen.
-           Solange geladen wird, bleibt es stehen und schluckt alle Klicks. ─── */}
+      {/* ─── Track-Intro: Vollbild-Moment beim Kartenziehen. Derselbe Vorhang
+           deckt das Laden ab und schluckt dabei alle Klicks; die Track-Nummer
+           kommt erst dazu, wenn die Karte da ist — und damit genau einmal. ─── */}
       {intro && (
         <div
-          className={`track-intro${intro.loading ? ' is-loading' : ''}`}
-          role={intro.loading ? 'status' : undefined}
-          aria-live={intro.loading ? 'polite' : undefined}
-          aria-hidden={intro.loading ? undefined : true}
+          className={`track-intro${intro.stage === 'leaving' ? ' is-leaving' : ''}`}
+          role={intro.stage === 'loading' ? 'status' : undefined}
+          aria-live={intro.stage === 'loading' ? 'polite' : undefined}
+          aria-hidden={intro.stage === 'loading' ? undefined : true}
         >
-          <div style={{ textAlign: 'center' }}>
-            <div className="track-intro-title">
-              Track {String(Math.min(intro.round, totalRounds)).padStart(2, '0')}
+          {intro.stage === 'loading' ? (
+            <span className="track-intro-hint">wird aufgelegt …</span>
+          ) : (
+            <div style={{ textAlign: 'center' }}>
+              <div className="track-intro-title">
+                Track {String(Math.min(intro.round, totalRounds)).padStart(2, '0')}
+              </div>
+              <div className="track-intro-sub">
+                {isMyTurn ? 'gut zuhören …' : `${activePlayerName} ist dran …`}
+              </div>
             </div>
-            <div className="track-intro-sub">
-              {intro.loading
-                ? 'wird aufgelegt …'
-                : isMyTurn ? 'gut zuhören …' : `${activePlayerName} ist dran …`}
-            </div>
-          </div>
+          )}
         </div>
       )}
 
