@@ -285,7 +285,10 @@ export class MatchRoom extends DurableObject {
       placedCards: [],
     }));
 
-    const deck = shuffleArray(this.seededDeck && this.seededDeck.length > 0 ? this.seededDeck : MOCK_TRACKS);
+    // A seeded deck is already randomised AND ordered so the same artist
+    // doesn't come up twice in a row (see deck-service) — reshuffling it here
+    // would throw that spacing away. Only the static mock fallback needs it.
+    const deck = this.seededDeck?.length ? [...this.seededDeck] : shuffleArray(MOCK_TRACKS);
 
     this.state = {
       lobbyId: command.lobbyId,

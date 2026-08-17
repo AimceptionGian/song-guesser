@@ -6,6 +6,9 @@ import {
   buildDeck,
   deckSizeFor,
   mergeDeduped,
+  orderByFreshness,
+  spreadArtists,
+  trackKey,
 } from '../deck-service';
 import { catalogService } from '../catalog-service';
 import { DECADES, DECADE_HITS } from '../../db/decade-hits';
@@ -100,6 +103,106 @@ describe('deck-service', () => {
       const total = DECADES.reduce((n, d) => n + DECADE_HITS[d].length, 0);
       expect(buildCuratedDecadeCards(total + 50)).toHaveLength(total);
     });
+
+    it('holds enough songs that a match cannot drain the pool', () => {
+      // Repeat protection only buys variety if there is variety to hand out:
+      // a match deals ~25 cards, so a shallow pool guarantees repeats.
+      const total = DECADES.reduce((n, d) => n + DECADE_HITS[d].length, 0);
+      expect(total).toBeGreaterThanOrEqual(150);
+      for (const decade of DECADES) {
+        expect(DECADE_HITS[decade].length).toBeGreaterThanOrEqual(20);
+      }
+    });
+
+    it('skips recently played songs while fresh ones remain', () => {
+      const played = buildCuratedDecadeCards(30);
+      const recency = new Map(played.map((c, i) => [trackKey(c.artist, c.title), i]));
+
+      const next = buildCuratedDecadeCards(30, recency);
+      const playedKeys = new Set(recency.keys());
+
+      expect(next.filter((c) => playedKeys.has(trackKey(c.artist, c.title)))).toHaveLength(0);
+    });
+
+    it('falls back to the oldest songs once everything has been played', () => {
+      const total = DECADES.reduce((n, d) => n + DECADE_HITS[d].length, 0);
+      const everything = buildCuratedDecadeCards(total);
+      const recency = new Map(everything.map((c, i) => [trackKey(c.artist, c.title), i]));
+
+      // Nothing is fresh any more — the deck must still fill up rather than
+      // come back short.
+      expect(buildCuratedDecadeCards(30, recency)).toHaveLength(30);
+    });
+
+    it('never deals the same song twice within one deck', () => {
+      const keys = buildCuratedDecadeCards(60).map((c) => trackKey(c.artist, c.title));
+      expect(new Set(keys).size).toBe(keys.length);
+    });
+  });
+
+  describe('trackKey', () => {
+    it('collapses the same song from different sources onto one key', () => {
+      expect(trackKey("Guns N' Roses", "Sweet Child O' Mine"))
+        .toBe(trackKey('guns n roses', 'sweet child o mine'));
+    });
+
+    it('keeps different songs apart', () => {
+      expect(trackKey('Queen', 'Bohemian Rhapsody')).not.toBe(trackKey('Queen', 'We Will Rock You'));
+    });
+  });
+
+  describe('orderByFreshness', () => {
+    const key = (s: string) => s;
+
+    it('puts songs nobody heard recently ahead of remembered ones', () => {
+      const recency = new Map([['a', 0], ['b', 1], ['c', 2]]);
+      const ordered = orderByFreshness(['a', 'b', 'c', 'fresh'], key, recency);
+      expect(ordered[0]).toBe('fresh');
+    });
+
+    it('orders remembered songs least-recently-played first', () => {
+      const recency = new Map([['oldest', 0], ['middle', 1], ['newest', 2]]);
+      expect(orderByFreshness(['newest', 'middle', 'oldest'], key, recency))
+        .toEqual(['oldest', 'middle', 'newest']);
+    });
+
+    it('never drops items, so a saturated memory cannot starve the deck', () => {
+      const items = ['a', 'b', 'c'];
+      const recency = new Map(items.map((k, i) => [k, i]));
+      expect(orderByFreshness(items, key, recency).sort()).toEqual(items);
+    });
+
+    it('leaves the order random when nothing has been played yet', () => {
+      const items = Array.from({ length: 30 }, (_, i) => `s${i}`);
+      const ordered = orderByFreshness(items, key, new Map());
+      expect(ordered).toHaveLength(30);
+      expect(ordered).not.toEqual(items);
+    });
+  });
+
+  describe('spreadArtists', () => {
+    it('separates two songs by the same artist', () => {
+      const deck = spreadArtists([
+        makeCard({ id: '1', artist: 'Queen' }),
+        makeCard({ id: '2', artist: 'Queen' }),
+        makeCard({ id: '3', artist: 'ABBA' }),
+        makeCard({ id: '4', artist: 'Toto' }),
+      ]);
+      const adjacent = deck.some((c, i) => i > 0 && c.artist === deck[i - 1].artist);
+      expect(adjacent).toBe(false);
+    });
+
+    it('keeps every card', () => {
+      const cards = Array.from({ length: 10 }, (_, i) =>
+        makeCard({ id: `c${i}`, artist: i % 2 === 0 ? 'A' : 'B' })
+      );
+      expect(spreadArtists(cards).map((c) => c.id).sort()).toEqual(cards.map((c) => c.id).sort());
+    });
+
+    it('survives a deck where one artist has no alternative', () => {
+      const cards = [makeCard({ id: '1', artist: 'A' }), makeCard({ id: '2', artist: 'A' })];
+      expect(spreadArtists(cards)).toHaveLength(2);
+    });
   });
 
   describe('mergeDeduped', () => {
@@ -154,6 +257,42 @@ describe('deck-service', () => {
       const deck = await buildRandomHitsDeck(NO_SPOTIFY_ENV, 20);
       expect(deck).toHaveLength(20);
       expect(deck!.filter((c) => c.id.startsWith('chart-')).length).toBeGreaterThan(0);
+    });
+
+    it('deals a completely different set to the next match', async () => {
+      vi.spyOn(catalogService, 'getChartTracks').mockResolvedValue([]);
+
+      const first = await buildRandomHitsDeck(NO_SPOTIFY_ENV, 30);
+      const recency = new Map(first!.map((c, i) => [trackKey(c.artist, c.title), i]));
+      const second = await buildRandomHitsDeck(NO_SPOTIFY_ENV, 30, recency);
+
+      const firstKeys = new Set(recency.keys());
+      expect(second!.filter((c) => firstKeys.has(trackKey(c.artist, c.title)))).toHaveLength(0);
+    });
+
+    it('never lands the same artist on two consecutive turns', async () => {
+      vi.spyOn(catalogService, 'getChartTracks').mockResolvedValue([]);
+
+      const deck = await buildRandomHitsDeck(NO_SPOTIFY_ENV, 40);
+      const adjacent = deck!.filter((c, i) => i > 0 && c.artist === deck![i - 1].artist);
+      expect(adjacent).toEqual([]);
+    });
+
+    it('prefers chart entries the group has not had yet', async () => {
+      const tracks = Array.from({ length: 20 }, (_, i) =>
+        makeCatalogTrack({ id: `chart-${i}`, artist: `Artist ${i}`, title: `Chart Song ${i}` })
+      );
+      vi.spyOn(catalogService, 'getChartTracks').mockResolvedValue(tracks);
+
+      // Everything but the last two chart entries was played recently
+      const recency = new Map(
+        tracks.slice(0, 18).map((t, i) => [trackKey(t.artist, t.title), i])
+      );
+      const deck = await buildRandomHitsDeck(NO_SPOTIFY_ENV, 30, recency);
+      const chartIds = deck!.filter((c) => c.id.startsWith('chart-')).map((c) => c.id);
+
+      expect(chartIds).toContain('chart-18');
+      expect(chartIds).toContain('chart-19');
     });
   });
 
@@ -228,6 +367,44 @@ describe('deck-service', () => {
       expect(deck).toBeDefined();
       // Fallback deck is random-hits, so it should include chart or decade cards
       expect(deck!.some((c) => c.id === 'deezer-1' || c.id.startsWith('decade-'))).toBe(true);
+    });
+
+    it('records the dealt songs so the next match can avoid them', async () => {
+      vi.spyOn(historyStore.DurableObjectRecentPickStore.prototype, 'getRecentKeys').mockResolvedValue([]);
+      const remember = vi
+        .spyOn(historyStore.DurableObjectRecentPickStore.prototype, 'rememberKeys')
+        .mockResolvedValue();
+      vi.spyOn(catalogService, 'getChartTracks').mockResolvedValue([]);
+
+      const deck = await buildDeck(NO_SPOTIFY_ENV, makeLobby());
+
+      expect(remember).toHaveBeenCalledWith(deck!.map((c) => trackKey(c.artist, c.title)));
+    });
+
+    it('hands consecutive matches disjoint decks', async () => {
+      const played: string[] = [];
+      vi.spyOn(historyStore.DurableObjectRecentPickStore.prototype, 'getRecentKeys')
+        .mockImplementation(async () => [...played]);
+      vi.spyOn(historyStore.DurableObjectRecentPickStore.prototype, 'rememberKeys')
+        .mockImplementation(async (keys) => { played.push(...keys); });
+      vi.spyOn(catalogService, 'getChartTracks').mockResolvedValue([]);
+
+      const first = await buildDeck(NO_SPOTIFY_ENV, makeLobby());
+      const second = await buildDeck(NO_SPOTIFY_ENV, makeLobby());
+
+      const firstKeys = new Set(first!.map((c) => trackKey(c.artist, c.title)));
+      expect(second!.filter((c) => firstKeys.has(trackKey(c.artist, c.title)))).toEqual([]);
+    });
+
+    it('still starts a match when the repeat-protection store is unreachable', async () => {
+      vi.spyOn(historyStore.DurableObjectRecentPickStore.prototype, 'getRecentKeys')
+        .mockRejectedValue(new Error('registry down'));
+      vi.spyOn(historyStore.DurableObjectRecentPickStore.prototype, 'rememberKeys')
+        .mockRejectedValue(new Error('registry down'));
+      vi.spyOn(catalogService, 'getChartTracks').mockResolvedValue([]);
+
+      const deck = await buildDeck(NO_SPOTIFY_ENV, makeLobby());
+      expect(deck!.length).toBeGreaterThan(0);
     });
   });
 });

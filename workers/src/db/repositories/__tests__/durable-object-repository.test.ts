@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { DurableObjectLobbyRepository } from '../durable-object-repository';
+import { DurableObjectLobbyRepository, DurableObjectRecentPickStore } from '../durable-object-repository';
 import type { Lobby } from '../../../types';
 
 function makeLobby(overrides: Partial<Lobby> = {}): Lobby {
@@ -104,5 +104,44 @@ describe('DurableObjectLobbyRepository', () => {
     expect(ns.idFromName).toHaveBeenCalledWith('global');
     expect(ns.idFromName).toHaveBeenCalledTimes(2);
     expect(ns.idFromName).not.toHaveBeenCalledWith(expect.stringMatching(/^(a|b)$/));
+  });
+});
+
+describe('DurableObjectRecentPickStore', () => {
+  it('reads the recently played keys from the registry', async () => {
+    const ns = createFakeNamespace(async (req) => {
+      expect(new URL(req.url).pathname).toBe('/getRecentPicks');
+      return Response.json({ keys: ['queen|bohemianrhapsody', 'abba|dancingqueen'] });
+    });
+    const store = new DurableObjectRecentPickStore({ LOBBY_REGISTRY: ns } as any);
+
+    expect(await store.getRecentKeys()).toEqual(['queen|bohemianrhapsody', 'abba|dancingqueen']);
+  });
+
+  it('tolerates a registry that has never stored picks', async () => {
+    const ns = createFakeNamespace(async () => Response.json({}));
+    const store = new DurableObjectRecentPickStore({ LOBBY_REGISTRY: ns } as any);
+
+    expect(await store.getRecentKeys()).toEqual([]);
+  });
+
+  it('posts new keys to /rememberPicks', async () => {
+    const ns = createFakeNamespace(async (req) => {
+      expect(new URL(req.url).pathname).toBe('/rememberPicks');
+      expect(await req.json()).toEqual({ keys: ['a|b'] });
+      return Response.json({ ok: true });
+    });
+    const store = new DurableObjectRecentPickStore({ LOBBY_REGISTRY: ns } as any);
+
+    await store.rememberKeys(['a|b']);
+    expect(ns.stub.fetch).toHaveBeenCalledOnce();
+  });
+
+  it('skips the round trip when there is nothing to remember', async () => {
+    const ns = createFakeNamespace(async () => Response.json({ ok: true }));
+    const store = new DurableObjectRecentPickStore({ LOBBY_REGISTRY: ns } as any);
+
+    await store.rememberKeys([]);
+    expect(ns.stub.fetch).not.toHaveBeenCalled();
   });
 });

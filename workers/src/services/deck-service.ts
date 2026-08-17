@@ -1,7 +1,7 @@
 import { catalogService } from './catalog-service';
 import { enrichTrackYears } from './spotify-year-service';
 import { buildCategoryPool, getCategoryDefinition, MIN_CATEGORY_POOL, DEFAULT_CATEGORY } from './category-service';
-import { DurableObjectHistoryStore } from '../db/repositories/durable-object-repository';
+import { DurableObjectHistoryStore, DurableObjectRecentPickStore } from '../db/repositories/durable-object-repository';
 import { DECADE_HITS, DECADES } from '../db/decade-hits';
 import type { DecadeHit } from '../db/decade-hits';
 import type { CatalogTrack } from '../adapters/catalog-provider';
@@ -34,6 +34,60 @@ export function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
+/**
+ * Identity of a song across sources: the same track reached via the chart,
+ * the curated list or a player's Spotify history must collapse to one key,
+ * otherwise neither the dedupe nor the repeat protection catches it.
+ */
+export function trackKey(artist: string, title: string): string {
+  return `${artist}|${title}`.toLowerCase().replace(/[^a-z0-9|]+/g, '');
+}
+
+/**
+ * Recently played songs, oldest first, as a rank lookup.
+ * Songs absent from the list rank ahead of every remembered one.
+ */
+export type Recency = ReadonlyMap<string, number>;
+
+const NO_RECENCY: Recency = new Map();
+
+function toRecency(keys: string[]): Recency {
+  return new Map(keys.map((key, i) => [key, i]));
+}
+
+/**
+ * Shuffle, then float the songs the group hasn't heard recently to the
+ * front; remembered ones follow least-recently-played first. This is a
+ * ranking, never a filter — a saturated memory degrades to "rotate through
+ * the oldest ones again" instead of starving the deck.
+ */
+export function orderByFreshness<T>(items: T[], keyOf: (item: T) => string, recency: Recency): T[] {
+  const shuffled = shuffle(items);
+  if (recency.size === 0) return shuffled;
+  return shuffled
+    .map((item, i) => ({ item, rank: recency.get(keyOf(item)) ?? -1, i }))
+    .sort((a, b) => a.rank - b.rank || a.i - b.i)
+    .map((entry) => entry.item);
+}
+
+/**
+ * Reorder so the same artist never sits back-to-back: with a deep pool,
+ * two Queen songs in consecutive turns read as "wieder dasselbe" even
+ * though they're different tracks. Greedy single pass — an artist that
+ * simply dominates the deck can still end up adjacent, which is fine.
+ */
+export function spreadArtists(cards: Card[]): Card[] {
+  const out = [...cards];
+  for (let i = 1; i < out.length; i++) {
+    if (out[i].artist !== out[i - 1].artist) continue;
+    const swap = out.findIndex(
+      (c, j) => j > i && c.artist !== out[i - 1].artist && c.artist !== (out[i + 1]?.artist ?? null)
+    );
+    if (swap !== -1) [out[i], out[swap]] = [out[swap], out[i]];
+  }
+  return out;
+}
+
 function cardFromCatalogTrack(t: CatalogTrack): Card {
   return {
     id: t.id,
@@ -57,8 +111,12 @@ function slugify(s: string): string {
  * years corrected via Spotify. Fetches more chart entries than needed and
  * samples randomly so results vary between games. Sampling happens BEFORE
  * year enrichment — each enriched track costs a Spotify subrequest.
+ *
+ * The chart itself barely moves from day to day, so sampling alone would
+ * still surface the same handful of songs every match; `recency` biases the
+ * sample towards entries the group hasn't had yet.
  */
-export async function fetchRecentChartCards(env: Env, count: number): Promise<Card[]> {
+export async function fetchRecentChartCards(env: Env, count: number, recency: Recency = NO_RECENCY): Promise<Card[]> {
   let tracks: CatalogTrack[];
   try {
     tracks = await catalogService.getChartTracks(50);
@@ -67,7 +125,7 @@ export async function fetchRecentChartCards(env: Env, count: number): Promise<Ca
   }
   if (tracks.length === 0) return [];
 
-  tracks = shuffle(tracks).slice(0, count);
+  tracks = orderByFreshness(tracks, (t) => trackKey(t.artist, t.title), recency).slice(0, count);
 
   try {
     tracks = await enrichTrackYears(tracks, env);
@@ -89,10 +147,13 @@ export async function fetchRecentChartCards(env: Env, count: number): Promise<Ca
  * non-expired preview URL can be obtained.
  *
  * Cards are drawn round-robin across the decades so every decade is
- * represented even when the target count is small.
+ * represented even when the target count is small. Ranking by `recency`
+ * happens per decade, so repeat protection never costs decade balance.
  */
-export function buildCuratedDecadeCards(targetCount: number): Card[] {
-  const perDecade = shuffle(DECADES).map((decade) => shuffle(DECADE_HITS[decade]));
+export function buildCuratedDecadeCards(targetCount: number, recency: Recency = NO_RECENCY): Card[] {
+  const perDecade = shuffle(DECADES).map((decade) =>
+    orderByFreshness(DECADE_HITS[decade], (hit) => trackKey(hit.artist, hit.title), recency)
+  );
   const cards: Card[] = [];
 
   for (let i = 0; cards.length < targetCount; i++) {
@@ -117,7 +178,7 @@ export function buildCuratedDecadeCards(targetCount: number): Card[] {
 }
 
 function dedupeKey(card: Card): string {
-  return `${card.artist}|${card.title}`.toLowerCase().replace(/[^a-z0-9|]+/g, '');
+  return trackKey(card.artist, card.title);
 }
 
 /**
@@ -140,23 +201,29 @@ export function mergeDeduped(preferred: Card[], other: Card[]): Card[] {
 
 /**
  * "Random Hits" deck: a blend of current chart hits and curated classics
- * spanning every decade from the 1960s to the 2010s, so the category isn't
+ * spanning every decade from the 1960s to the 2020s, so the category isn't
  * dominated by whatever happens to be on the charts right now.
  */
-export async function buildRandomHitsDeck(env: Env, deckSize = DEFAULT_DECK_SIZE): Promise<Card[] | undefined> {
-  const recent = await fetchRecentChartCards(env, Math.min(RECENT_CHART_COUNT, deckSize));
+export async function buildRandomHitsDeck(
+  env: Env,
+  deckSize = DEFAULT_DECK_SIZE,
+  recency: Recency = NO_RECENCY
+): Promise<Card[] | undefined> {
+  const recent = await fetchRecentChartCards(env, Math.min(RECENT_CHART_COUNT, deckSize), recency);
   // Curated cards are free to build, so over-provision and let them fill
   // whatever the chart didn't deliver: a failing chart provider then costs
   // variety, never deck size.
-  const curated = buildCuratedDecadeCards(deckSize);
+  const curated = buildCuratedDecadeCards(deckSize, recency);
   const merged = mergeDeduped(curated, recent);
 
   // Chart cards go in first so trimming to deckSize can't drop the handful of
-  // recent hits; the final shuffle spreads them through the deck again.
+  // recent hits. Both halves already arrive freshest-first, so the trim drops
+  // the songs the group heard most recently; the final shuffle spreads the
+  // chart cards through the deck again.
   const isCurated = (c: Card) => c.id.startsWith('decade-');
   const ordered = [...merged.filter((c) => !isCurated(c)), ...merged.filter(isCurated)];
 
-  const combined = shuffle(ordered.slice(0, deckSize));
+  const combined = spreadArtists(shuffle(ordered.slice(0, deckSize)));
   return combined.length > 0 ? combined : undefined;
 }
 
@@ -171,7 +238,8 @@ export async function buildHistoryDeck(
   env: Env,
   lobby: Lobby,
   category: string,
-  deckSize = DEFAULT_DECK_SIZE
+  deckSize = DEFAULT_DECK_SIZE,
+  recency: Recency = NO_RECENCY
 ): Promise<Card[] | undefined> {
   const histories = await new DurableObjectHistoryStore(env).getHistories(lobby.id);
   const pool = buildCategoryPool(category, histories, lobby.players.map((p) => p.id));
@@ -181,17 +249,23 @@ export async function buildHistoryDeck(
     return undefined;
   }
 
-  return shuffle(pool).slice(0, deckSize).map((t): Card => ({
-    id: t.id,
-    title: t.title,
-    artist: t.artist,
-    year: t.year ?? 2000,
-    genre: 'Pop',
-    emoji: '🎵',
-    gradient: CARD_GRADIENT,
-    // History artist strings can list several artists — search with the first
-    previewQuery: `${t.artist.split(',')[0].trim()} ${t.title}`,
-  }));
+  // A player's top tracks are a short list by definition, so this pool
+  // repeats even harder than the curated one without the recency ranking.
+  const cards = orderByFreshness(pool, (t) => trackKey(t.artist, t.title), recency)
+    .slice(0, deckSize)
+    .map((t): Card => ({
+      id: t.id,
+      title: t.title,
+      artist: t.artist,
+      year: t.year ?? 2000,
+      genre: 'Pop',
+      emoji: '🎵',
+      gradient: CARD_GRADIENT,
+      // History artist strings can list several artists — search with the first
+      previewQuery: `${t.artist.split(',')[0].trim()} ${t.title}`,
+    }));
+
+  return spreadArtists(shuffle(cards));
 }
 
 /**
@@ -207,17 +281,43 @@ export function deckSizeFor(lobby: Lobby): number {
  * Build the match deck for the lobby's selected category.
  * History categories fall back to the random-hits deck when their pool is
  * too small, so a match can always start.
+ *
+ * This is also the single place where cross-match repeat protection is
+ * applied: the songs of the previous decks are read in as a ranking, and the
+ * deck that comes out is written back. Both sides are best-effort — a
+ * registry hiccup must degrade to "same songs as before", never to a match
+ * that won't start.
  */
 export async function buildDeck(env: Env, lobby: Lobby): Promise<Card[] | undefined> {
   const category = lobby.category ?? DEFAULT_CATEGORY;
   const def = getCategoryDefinition(category);
   const size = deckSizeFor(lobby);
+  const store = new DurableObjectRecentPickStore(env);
 
-  if (def?.requiresHistory) {
-    const deck = await buildHistoryDeck(env, lobby, category, size);
-    if (deck) return deck;
-    console.warn(`[buildDeck] falling back to random-hits deck for category "${category}"`);
+  let recency: Recency = NO_RECENCY;
+  try {
+    recency = toRecency(await store.getRecentKeys());
+  } catch (err) {
+    console.warn('[buildDeck] recent-picks lookup failed, building without repeat protection:', err);
   }
 
-  return buildRandomHitsDeck(env, size);
+  let deck: Card[] | undefined;
+  if (def?.requiresHistory) {
+    deck = await buildHistoryDeck(env, lobby, category, size, recency);
+    if (!deck) console.warn(`[buildDeck] falling back to random-hits deck for category "${category}"`);
+  }
+  deck ??= await buildRandomHitsDeck(env, size, recency);
+
+  if (deck?.length) {
+    try {
+      // The whole deck is recorded, not just the cards that end up being
+      // drawn: that keeps this to one write per match instead of a registry
+      // round trip on every draw, and the pool is deep enough to afford it.
+      await store.rememberKeys(deck.map(dedupeKey));
+    } catch (err) {
+      console.warn('[buildDeck] could not record the deck for repeat protection:', err);
+    }
+  }
+
+  return deck;
 }

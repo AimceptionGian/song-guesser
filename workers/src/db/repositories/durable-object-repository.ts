@@ -43,6 +43,27 @@ export class DurableObjectHistoryStore {
   }
 }
 
+/**
+ * Songs recently dealt into a deck, kept globally (not per lobby) in the
+ * LobbyRegistry DO: a rematch always creates a fresh lobby, so per-lobby
+ * memory would reset exactly when repeat protection matters most.
+ * Keys are normalised artist|title strings — see deck-service.
+ */
+export class DurableObjectRecentPickStore {
+  constructor(private env: Env) {}
+
+  /** Oldest first, so the index doubles as a least-recently-played rank. */
+  async getRecentKeys(): Promise<string[]> {
+    const { keys } = await registryCall<{ keys: string[] }>(this.env, '/getRecentPicks', {});
+    return keys ?? [];
+  }
+
+  async rememberKeys(keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    await registryCall(this.env, '/rememberPicks', { keys });
+  }
+}
+
 export class DurableObjectLobbyRepository implements LobbyRepository {
   constructor(private env: Env) {}
 

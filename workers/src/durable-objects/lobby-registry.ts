@@ -3,6 +3,23 @@ import type { Lobby } from '../types';
 import type { HistoryTrack } from '../adapters/history-provider';
 import type { Env } from '../env';
 
+// ─── Recently played songs (cross-match repeat protection) ───
+// Stored under one key, ordered oldest → newest, so the deck builder can
+// rank candidates least-recently-played-first. Lives here rather than in a
+// MatchRoom because it has to outlive a single match: every "nochmal
+// spielen" creates a brand new lobby, and that is exactly when players
+// noticed the same songs coming back.
+const RECENT_PICKS_KEY = 'recent-picks';
+// Roughly six matches' worth of decks. Deliberately smaller than the
+// curated pool so there is always something genuinely fresh to draw.
+const RECENT_PICKS_MAX = 150;
+const RECENT_PICKS_TTL_MS = 12 * 60 * 60 * 1000;
+
+interface RecentPick {
+  key: string;
+  at: number;
+}
+
 /**
  * LobbyRegistry — single global Durable Object instance holding every lobby.
  *
@@ -86,8 +103,36 @@ export class LobbyRegistry extends DurableObject {
         }
         return Response.json({ histories });
       }
+      // Songs recently handed out in a deck, so the next deck can prefer
+      // ones the group hasn't heard yet. Keys are normalised artist|title
+      // (see deck-service), not provider ids, so the same song coming from
+      // the chart and from the curated list counts as one.
+      case '/getRecentPicks': {
+        const picks = await this.loadRecentPicks();
+        return Response.json({ keys: picks.map((p) => p.key) });
+      }
+      case '/rememberPicks': {
+        const { keys } = (await request.json()) as { keys: string[] };
+        if (keys?.length) {
+          const now = Date.now();
+          const fresh = new Set(keys);
+          // Re-picking a song moves it to the newest end rather than
+          // keeping its old position, so the ranking stays a true LRU.
+          const kept = (await this.loadRecentPicks()).filter((p) => !fresh.has(p.key));
+          const merged = [...kept, ...keys.map((key) => ({ key, at: now }))];
+          await this.storage.put(RECENT_PICKS_KEY, merged.slice(-RECENT_PICKS_MAX));
+        }
+        return Response.json({ ok: true });
+      }
       default:
         return new Response('Not found', { status: 404 });
     }
+  }
+
+  /** Stored picks, oldest first, with expired entries dropped. */
+  private async loadRecentPicks(): Promise<RecentPick[]> {
+    const stored = (await this.storage.get<RecentPick[]>(RECENT_PICKS_KEY)) ?? [];
+    const cutoff = Date.now() - RECENT_PICKS_TTL_MS;
+    return stored.filter((p) => p.at > cutoff);
   }
 }
