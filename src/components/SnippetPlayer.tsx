@@ -65,67 +65,119 @@ export default function SnippetPlayer({ previewUrl, durationSec }: SnippetPlayer
     };
   }, [previewUrl]);
 
-  // A new stage (longer snippet) starts fresh
-  useEffect(() => {
-    setPlays(0);
-    setProgress(0);
-  }, [durationSec]);
+  // The running playback: where in the snippet it started, and when audio
+  // actually began (null until the 'playing' event). Its position is derived
+  // from the clock, not from the animation loop — rAF stops in background
+  // tabs, the clock doesn't.
+  const runRef = useRef<{ offsetMs: number; startedAt: number | null } | null>(null);
+  const cutoffRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const positionMs = () => {
+    const run = runRef.current;
+    if (!run) return 0;
+    return run.offsetMs + (run.startedAt === null ? 0 : performance.now() - run.startedAt);
+  };
 
   const stop = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
+    if (cutoffRef.current) clearTimeout(cutoffRef.current);
+    cutoffRef.current = null;
     audioRef.current?.pause();
+    runRef.current = null;
     setPlaying(false);
   }, []);
 
-  const play = useCallback(() => {
+  useEffect(() => stop, [stop]);
+
+  // Where in the snippet a paused playback stands (seconds); null = not paused
+  const [pausedAtSec, setPausedAtSec] = useState<number | null>(null);
+
+  // A new stage (longer snippet) starts fresh
+  useEffect(() => {
+    stop();
+    setPlays(0);
+    setProgress(0);
+    setPausedAtSec(null);
+  }, [durationSec, stop]);
+
+  /** Play from `fromSec` into the snippet until the snippet's end. */
+  const start = useCallback((fromSec: number, resume = false) => {
     const audio = audioRef.current;
     if (!audio || playing) return;
     audio.pause();
-    audio.currentTime = 0;
-    setProgress(0);
+    audio.currentTime = fromSec;
+    setPausedAtSec(null);
     setPlaying(true);
-    setPlays((n) => n + 1);
+    if (!resume) {
+      setProgress(0);
+      setPlays((n) => n + 1);
+    }
 
     const limitMs = durationSec * 1000;
-    let startedAt: number | null = null;
-    const onPlaying = () => { startedAt = performance.now(); };
-    audio.addEventListener('playing', onPlaying, { once: true });
+    const run = { offsetMs: fromSec * 1000, startedAt: null as number | null };
+    runRef.current = run;
 
+    const finish = () => {
+      if (runRef.current !== run) return;
+      stop();
+      setProgress(1);
+    };
+    const begin = () => {
+      if (run.startedAt !== null || runRef.current !== run) return;
+      run.startedAt = performance.now();
+      // Backstop for the rAF cut-off, which browsers suspend in background tabs
+      cutoffRef.current = setTimeout(finish, limitMs - run.offsetMs + 30);
+      rafRef.current = requestAnimationFrame(tick);
+    };
     const tick = () => {
-      const elapsedMs = startedAt === null ? 0 : performance.now() - startedAt;
-      setProgress(Math.min(1, elapsedMs / limitMs));
-      if (startedAt !== null && (elapsedMs >= limitMs || audio.currentTime >= durationSec)) {
-        stop();
-        setProgress(1);
+      if (runRef.current !== run) return;
+      const pos = positionMs();
+      setProgress(Math.min(1, pos / limitMs));
+      if (pos >= limitMs || audio.currentTime >= durationSec) {
+        finish();
         return;
       }
       rafRef.current = requestAnimationFrame(tick);
     };
+
+    audio.addEventListener('playing', begin, { once: true });
     audio.play()
-      .then(() => {
-        // Some browsers resolve play() without a separate 'playing' event
-        startedAt ??= performance.now();
-        rafRef.current = requestAnimationFrame(tick);
-      })
+      // Some browsers resolve play() without a separate 'playing' event
+      .then(begin)
       .catch(() => {
-        audio.removeEventListener('playing', onPlaying);
+        audio.removeEventListener('playing', begin);
+        if (runRef.current === run) runRef.current = null;
         setPlaying(false);
         setFailed(true);
       });
   }, [durationSec, playing, stop]);
 
+  /** Main button: pause while playing, resume when paused, else play from the start. */
+  const toggle = useCallback(() => {
+    if (playing) {
+      const at = Math.min(durationSec, positionMs() / 1000);
+      stop();
+      setPausedAtSec(at);
+    } else if (pausedAtSec !== null) {
+      start(pausedAtSec, true);
+    } else {
+      start(0);
+    }
+  }, [playing, pausedAtSec, durationSec, start, stop]);
+
   const label = formatSnippetSec(durationSec);
+  const paused = pausedAtSec !== null;
 
   return (
     <div className="panel-inset" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 14, padding: '12px 14px' }}>
       <button
-        onClick={play}
-        disabled={!ready || playing || failed}
-        aria-label={`${label} anhören`}
+        onClick={toggle}
+        disabled={!ready || failed}
+        aria-label={playing ? 'Anhalten' : paused ? 'Weiter abspielen' : `${label} anhören`}
         style={{
           border: 'none', background: 'none', padding: 0, flexShrink: 0, borderRadius: '50%',
-          cursor: ready && !playing && !failed ? 'pointer' : 'default',
+          cursor: ready && !failed ? 'pointer' : 'default',
         }}
       >
         <span
@@ -142,14 +194,37 @@ export default function SnippetPlayer({ previewUrl, durationSec }: SnippetPlayer
             display: 'grid', placeItems: 'center',
           }}>
             <svg viewBox="0 0 24 24" style={{ width: 10, height: 10, fill: '#0b0a12' }}>
-              <polygon points="6 3 21 12 6 21 6 3" />
+              {playing ? (
+                <>
+                  <rect x="6" y="4" width="4" height="16" />
+                  <rect x="14" y="4" width="4" height="16" />
+                </>
+              ) : (
+                <polygon points="6 3 21 12 6 21 6 3" />
+              )}
             </svg>
           </span>
         </span>
       </button>
       <div style={{ flex: 1, minWidth: 150 }}>
-        <div className="display" style={{ fontSize: '1rem', color: 'var(--ink)' }}>
-          {failed ? 'Vorschau lädt nicht' : !ready ? 'Lädt …' : playing ? 'Läuft …' : plays === 0 ? `${label} anhören` : `Nochmal ${label}`}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <div className="display" style={{ fontSize: '1rem', color: 'var(--ink)' }}>
+            {failed
+              ? 'Vorschau lädt nicht'
+              : !ready ? 'Lädt …'
+              : playing ? 'Läuft …'
+              : paused ? `Angehalten bei ${formatSnippetSec(Math.round(pausedAtSec * 10) / 10)}`
+              : plays === 0 ? `${label} anhören` : `Nochmal ${label}`}
+          </div>
+          {paused && (
+            <button
+              onClick={() => start(0)}
+              className="btn-ghost"
+              style={{ padding: '3px 9px', fontSize: '0.7rem', marginLeft: 'auto', whiteSpace: 'nowrap' }}
+            >
+              ↺ von vorn
+            </button>
+          )}
         </div>
         <div style={{ height: 6, borderRadius: 3, background: 'rgba(244,241,255,0.08)', overflow: 'hidden', marginTop: 8 }}>
           <div style={{
