@@ -92,6 +92,7 @@ export function BuzzerRound({
         remotePlayback={isController ? null : playback}
         onTransport={onTransport}
         hold={!!buzzer.winnerId}
+        startOnly
       />
       {isController && !buzzer.winnerId && (
         <div style={{ color: 'var(--dim)', fontSize: '0.72rem', textAlign: 'center', marginTop: -6 }}>

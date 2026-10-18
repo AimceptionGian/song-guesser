@@ -17,6 +17,11 @@ interface AudioPlayerProps {
    * been playing — for spectators by following the remote state again.
    */
   hold?: boolean;
+  /**
+   * The controller can only start playback — no pausing, no seeking
+   * (buzzer mode: the music runs for everyone until someone buzzes).
+   */
+  startOnly?: boolean;
 }
 
 /**
@@ -89,6 +94,7 @@ export default function AudioPlayer({
   remotePlayback = null,
   onTransport,
   hold = false,
+  startOnly = false,
 }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -179,6 +185,7 @@ export default function AudioPlayer({
     }
 
     if (isPlaying) {
+      if (startOnly) return;
       audio.pause();
       setIsPlaying(false);
       onTransport?.(false, audio.currentTime);
@@ -191,7 +198,7 @@ export default function AudioPlayer({
         })
         .catch(() => setHasError(true));
     }
-  }, [isPlaying, isController, needsGesture, remotePlayback, onTransport, hold]);
+  }, [isPlaying, isController, needsGesture, remotePlayback, onTransport, hold, startOnly]);
 
   // ─── Hold: pause everywhere while someone answers a buzz ───
   const resumeAfterHoldRef = useRef(false);
@@ -246,7 +253,10 @@ export default function AudioPlayer({
 
   const displayDuration = duration > 0 ? duration : 30;
   const displayCurrent = currentTime > 0 ? currentTime : 0;
-  const canInteract = !noAudio && (isController || needsGesture);
+  // Running and not allowed to stop: the vinyl just spins
+  const pauseLocked = startOnly && isController && isPlaying;
+  const canInteract = !noAudio && !pauseLocked && (isController || needsGesture);
+  const canSeek = !noAudio && isController && !startOnly;
 
   return (
     <div
@@ -264,8 +274,8 @@ export default function AudioPlayer({
       {/* Vinyl = Play/Pause */}
       <button
         onClick={togglePlay}
-        disabled={noAudio || (!isController && !needsGesture)}
-        aria-label={isPlaying ? 'Pause' : 'Abspielen'}
+        disabled={noAudio || pauseLocked || (!isController && !needsGesture)}
+        aria-label={pauseLocked ? 'Läuft' : isPlaying ? 'Pause' : 'Abspielen'}
         style={{
           border: 'none',
           background: 'none',
@@ -282,9 +292,11 @@ export default function AudioPlayer({
               ? needsGesture
                 ? 'Tippen zum Mithören'
                 : 'Der Spieler am Zug steuert die Wiedergabe'
-              : isPlaying
-                ? 'Pause'
-                : 'Vorschau abspielen'
+              : pauseLocked
+                ? 'Die Musik läuft bis zum nächsten Buzz'
+                : isPlaying
+                  ? 'Pause'
+                  : 'Vorschau abspielen'
         }
       >
         <span
@@ -318,7 +330,7 @@ export default function AudioPlayer({
               <svg viewBox="0 0 24 24" style={{ width: 12, height: 12, fill: '#0b0a12' }}>
                 <path d="M11 15h2v2h-2zm0-8h2v6h-2zm.99-5C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z" />
               </svg>
-            ) : isPlaying ? (
+            ) : pauseLocked ? null : isPlaying ? (
               <svg viewBox="0 0 24 24" style={{ width: 10, height: 10, fill: '#0b0a12' }}>
                 <rect x="6" y="4" width="4" height="16" />
                 <rect x="14" y="4" width="4" height="16" />
@@ -332,7 +344,7 @@ export default function AudioPlayer({
         </span>
       </button>
 
-      {/* Waveform-Fortschritt (klicken = spulen) */}
+      {/* Waveform-Fortschritt (klicken = spulen, ausser im Buzzer-Modus) */}
       <div
         role="progressbar"
         aria-valuenow={Math.round(progress)}
@@ -345,10 +357,10 @@ export default function AudioPlayer({
           display: 'flex',
           alignItems: 'center',
           gap: 2,
-          cursor: noAudio || !isController ? 'default' : 'pointer',
+          cursor: canSeek ? 'pointer' : 'default',
         }}
         onClick={(e) => {
-          if (!audioRef.current || !isController) return;
+          if (!audioRef.current || !canSeek) return;
           const rect = e.currentTarget.getBoundingClientRect();
           const pct = (e.clientX - rect.left) / rect.width;
           const newPos = pct * (audioRef.current.duration || 30);
