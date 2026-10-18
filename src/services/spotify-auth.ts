@@ -6,7 +6,16 @@
 const VERIFIER_KEY = 'sg-spotify-verifier';
 const PENDING_KEY = 'sg-spotify-pending';
 
-export const SPOTIFY_SCOPES = 'user-read-recently-played user-top-read';
+// user-library-read (liked songs) is by far the largest history source and
+// what makes the "Alle kennen ihn" intersection big enough to play.
+export const SPOTIFY_SCOPES = 'user-read-recently-played user-top-read user-library-read';
+
+/**
+ * Bumped whenever the synced history gets richer (new scope or source).
+ * A cached history from an older version is still imported, but the lobby
+ * offers a re-sync so the player picks up the bigger history.
+ */
+export const HISTORY_VERSION = 2;
 
 /** Lobby session info persisted across the OAuth redirect. */
 export interface PendingSpotifyAuth {

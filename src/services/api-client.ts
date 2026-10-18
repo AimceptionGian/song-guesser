@@ -3,6 +3,8 @@
 // In production, calls go directly to the Worker URL.
 // Override via VITE_API_BASE env var for local dev.
 
+import type { GameMode } from '../types';
+
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 
 interface FetchOptions {
@@ -35,6 +37,8 @@ async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
 
 // ─── Types mirroring backend DTOs ───
 
+export type { GameMode };
+
 export interface CreateLobbyRequest {
   hostName: string;
   hostAvatar: string;
@@ -44,9 +48,9 @@ export interface CreateLobbyRequest {
     maxPoints: number;
     timelineOnlyScoring: boolean;
     yearRange: { min: number; max: number };
+    gameMode: GameMode;
     guessMode: 'type' | 'speak';
     answerTimeSec: number;
-    buzzerEnabled: boolean;
   }>;
 }
 
@@ -119,11 +123,22 @@ export function clearLobbySession(): void {
 // ─── Spotify history cache (so players stay "connected" across lobbies) ───
 
 const HISTORY_CACHE_KEY = 'sg-spotify-history';
+const HISTORY_VERSION_KEY = 'sg-spotify-history-version';
 
-export function saveHistoryCache(tracks: HistoryTrackDto[]): void {
+export function saveHistoryCache(tracks: HistoryTrackDto[], version: number): void {
   try {
     localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(tracks));
+    localStorage.setItem(HISTORY_VERSION_KEY, String(version));
   } catch { /* storage unavailable or quota exceeded */ }
+}
+
+/** Version of the cached history (see HISTORY_VERSION); 1 for caches from before versioning. */
+export function getHistoryCacheVersion(): number {
+  try {
+    return Number(localStorage.getItem(HISTORY_VERSION_KEY)) || 1;
+  } catch {
+    return 1;
+  }
 }
 
 export function getHistoryCache(): HistoryTrackDto[] | null {
@@ -149,9 +164,9 @@ export interface LobbyData {
     maxPoints: number;
     timelineOnlyScoring: boolean;
     yearRange: { min: number; max: number };
+    gameMode?: GameMode;
     guessMode?: 'type' | 'speak';
     answerTimeSec?: number;
-    buzzerEnabled?: boolean;
   };
   createdAt: number;
   playersWithHistory?: string[];
@@ -164,17 +179,19 @@ const PREFS_KEY = 'sg-lobby-prefs';
 
 export interface LobbyPrefs {
   totalRounds: number;
+  gameMode: GameMode;
   guessMode: 'type' | 'speak';
   answerTimeSec: number;
-  buzzerEnabled: boolean;
 }
 
 export const DEFAULT_LOBBY_PREFS: LobbyPrefs = {
   totalRounds: 5,
+  gameMode: 'timeline',
   guessMode: 'type',
   answerTimeSec: 0,
-  buzzerEnabled: false,
 };
+
+const GAME_MODES: GameMode[] = ['timeline', 'buzzer', 'snippet'];
 
 export function saveLobbyPrefs(prefs: LobbyPrefs): void {
   try {
@@ -186,7 +203,14 @@ export function getLobbyPrefs(): LobbyPrefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
     if (!raw) return DEFAULT_LOBBY_PREFS;
-    return { ...DEFAULT_LOBBY_PREFS, ...(JSON.parse(raw) as Partial<LobbyPrefs>) };
+    const stored = JSON.parse(raw) as Partial<LobbyPrefs>;
+    return {
+      totalRounds: stored.totalRounds ?? DEFAULT_LOBBY_PREFS.totalRounds,
+      // Prefs saved before game modes existed still carry the old buzzer flag
+      gameMode: GAME_MODES.includes(stored.gameMode as GameMode) ? stored.gameMode! : DEFAULT_LOBBY_PREFS.gameMode,
+      guessMode: stored.guessMode === 'speak' ? 'speak' : 'type',
+      answerTimeSec: stored.answerTimeSec ?? DEFAULT_LOBBY_PREFS.answerTimeSec,
+    };
   } catch {
     return DEFAULT_LOBBY_PREFS;
   }
@@ -293,14 +317,19 @@ export const api = {
     return apiFetch(`/games/${code}/playback`, { method: 'POST', body: state });
   },
 
-  /** Buzz to steal a point after the active player's time ran out */
+  /** Buzzer mode: buzz to answer the current song */
   buzz(code: string, playerId: string): Promise<{ accepted: boolean; errorCode?: string; state: import('../types').GameState | null }> {
     return apiFetch(`/games/${code}/buzz`, { method: 'POST', body: { playerId } });
   },
 
-  /** Buzzer winner submits one guess (matched against artist OR title) */
-  buzzerAnswer(code: string, playerId: string, text: string): Promise<{ accepted: boolean; state: import('../types').GameState | null }> {
-    return apiFetch(`/games/${code}/buzzer-answer`, { method: 'POST', body: { playerId, text } });
+  /** Buzz winner answers — artist AND title must both be right */
+  buzzerAnswer(code: string, playerId: string, answer: { artist: string; title: string }): Promise<{ accepted: boolean; state: import('../types').GameState | null }> {
+    return apiFetch(`/games/${code}/buzzer-answer`, { method: 'POST', body: { playerId, ...answer } });
+  },
+
+  /** Snippet mode: guess for the current stage, or pass */
+  snippetGuess(code: string, guess: { playerId: string; artist: string; title: string; pass?: boolean }): Promise<{ accepted: boolean; errorCode?: string; state: import('../types').GameState | null }> {
+    return apiFetch(`/games/${code}/snippet-guess`, { method: 'POST', body: guess });
   },
 
   /** Speak mode: vote whether the guesser said artist/title correctly */
@@ -321,7 +350,7 @@ export const api = {
   },
 
   /** Draw the next card (playerId enforces turn order server-side) */
-  drawCard(code: string, playerId?: string): Promise<{ accepted: boolean; newVersion: number; stateDelta: Record<string, unknown>; state: import('../types').GameState | null }> {
+  drawCard(code: string, playerId?: string): Promise<{ accepted: boolean; errorCode?: string; newVersion: number; stateDelta: Record<string, unknown>; state: import('../types').GameState | null }> {
     return apiFetch(`/games/${code}/draw`, { method: 'POST', body: playerId ? { playerId } : {} });
   },
 

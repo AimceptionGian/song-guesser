@@ -43,11 +43,34 @@ const mockTopTracksResponse = {
 
 const emptyListResponse = { items: [], next: null, limit: 50 };
 
-/** fetchHistory calls recently-played first, then top-tracks. */
-function mockSpotifyResponses(recentBody: unknown, topBody: unknown, recentStatus = 200, topStatus = 200) {
-  return vi.spyOn(globalThis, 'fetch')
-    .mockResolvedValueOnce(new Response(JSON.stringify(recentBody), { status: recentStatus }))
-    .mockResolvedValueOnce(new Response(JSON.stringify(topBody), { status: topStatus }));
+const emptySavedResponse = { items: [], total: 0, limit: 50 };
+
+/**
+ * Route Spotify requests by URL. fetchHistory hits several endpoints in
+ * parallel; the top-tracks body is served for the first medium_term page
+ * only (every other range/page is empty), so counts stay easy to reason
+ * about. Liked songs default to empty.
+ */
+function mockSpotifyResponses(
+  recentBody: unknown,
+  topBody: unknown,
+  recentStatus = 200,
+  topStatus = 200,
+  savedBody: unknown = emptySavedResponse,
+  savedStatus = 200,
+) {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = String(input);
+    const respond = (body: unknown, status: number) =>
+      new Response(JSON.stringify(body), { status });
+    if (url.includes('/me/player/recently-played')) return respond(recentBody, recentStatus);
+    if (url.includes('/me/top/tracks')) {
+      const isFirstMediumPage = url.includes('time_range=medium_term') && url.includes('offset=0');
+      return respond(topStatus === 200 && !isFirstMediumPage ? emptyListResponse : topBody, topStatus);
+    }
+    if (url.includes('/me/tracks')) return respond(savedBody, savedStatus);
+    throw new Error(`unexpected fetch ${url}`);
+  });
 }
 
 describe('SpotifyHistoryProvider', () => {
@@ -128,25 +151,88 @@ describe('SpotifyHistoryProvider', () => {
       expect(result!.tracks[0].artist).toBe('Queen');
     });
 
-    it('should return null when both endpoints error', async () => {
-      mockSpotifyResponses(
-        { error: { message: 'Invalid token' } },
-        { error: { message: 'Invalid token' } },
-        401,
-        401,
-      );
+    it('should return null when every endpoint errors', async () => {
+      const invalid = { error: { message: 'Invalid token' } };
+      mockSpotifyResponses(invalid, invalid, 401, 401, invalid, 401);
 
       const result = await provider.fetchHistory('player-1', 'bad-token');
       expect(result).toBeNull();
     });
 
     it('should handle network failure gracefully', async () => {
-      vi.spyOn(globalThis, 'fetch')
-        .mockRejectedValueOnce(new Error('Network error'))
-        .mockRejectedValueOnce(new Error('Network error'));
+      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network error'));
 
       const result = await provider.fetchHistory('player-1', 'valid-token');
       expect(result).toBeNull();
+    });
+
+    it('should fetch top tracks for every time range', async () => {
+      const fetchSpy = mockSpotifyResponses(emptyListResponse, mockTopTracksResponse);
+
+      await provider.fetchHistory('player-1', 'valid-token');
+
+      const urls = fetchSpy.mock.calls.map(([input]) => String(input));
+      for (const range of ['short_term', 'medium_term', 'long_term']) {
+        expect(urls.some((u) => u.includes('/me/top/tracks') && u.includes(`time_range=${range}`))).toBe(true);
+      }
+    });
+
+    it('should include liked songs and page through them', async () => {
+      const likedPage = (offset: number) => ({
+        items: Array.from({ length: 50 }, (_, i) => ({
+          added_at: '2024-02-01T00:00:00.000Z',
+          track: {
+            id: `liked${offset + i}`,
+            name: `Liked ${offset + i}`,
+            artists: [{ id: 'x', name: 'Someone' }],
+            album: { name: 'A', release_date: '2010-01-01' },
+          },
+        })),
+        total: 120,
+        limit: 50,
+      });
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/me/tracks')) {
+          const offset = Number(new URL(url).searchParams.get('offset'));
+          return new Response(JSON.stringify(likedPage(offset)), { status: 200 });
+        }
+        return new Response(JSON.stringify(emptyListResponse), { status: 200 });
+      });
+
+      const result = await provider.fetchHistory('player-1', 'valid-token');
+      // offsets 0, 50, 100 → 150 entries, all distinct songs
+      expect(result!.tracks).toHaveLength(150);
+      expect(result!.tracks.every((t) => !t.isTop)).toBe(true);
+    });
+
+    it('should still sync when liked songs are not authorised (older token)', async () => {
+      mockSpotifyResponses(
+        mockRecentlyPlayedResponse, emptyListResponse, 200, 200,
+        { error: { message: 'Insufficient client scope' } }, 403,
+      );
+
+      const result = await provider.fetchHistory('player-1', 'old-token');
+      expect(result!.tracks).toHaveLength(2);
+    });
+
+    it('should merge different releases of the same song into one entry', async () => {
+      const remaster = {
+        items: [{
+          id: 'remaster-id',
+          name: 'Blinding Lights - Radio Edit',
+          artists: [{ id: 'a1', name: 'The Weeknd' }],
+          album: { name: 'Single', release_date: '2019-11-29' },
+        }],
+        next: null,
+        limit: 50,
+      };
+      mockSpotifyResponses(mockRecentlyPlayedResponse, remaster);
+
+      const result = await provider.fetchHistory('player-1', 'valid-token');
+      const blinding = result!.tracks.filter((t) => t.title.startsWith('Blinding Lights'));
+      expect(blinding).toHaveLength(1);
+      expect(blinding[0].isTop).toBe(true);
     });
 
     it('should handle multi-artist tracks', async () => {

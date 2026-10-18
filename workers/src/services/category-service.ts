@@ -1,5 +1,6 @@
 import type { CategoryEligibility } from '../types';
 import type { HistoryTrack } from '../adapters/history-provider';
+import { songKey } from './song-key';
 
 export interface CategoryDefinition {
   name: string;
@@ -11,6 +12,17 @@ export interface CategoryDefinition {
 
 /** Minimum pool size for a history category to be playable. */
 export const MIN_CATEGORY_POOL = 10;
+
+/**
+ * heard_by_all is an intersection and naturally much smaller than the other
+ * pools. Its deck is topped up from the songs at least one player knows
+ * (see deck-service), so a handful of shared songs is enough to play it.
+ */
+export const MIN_SHARED_POOL = 5;
+
+export function minPoolFor(category: string): number {
+  return category === 'heard_by_all' ? MIN_SHARED_POOL : MIN_CATEGORY_POOL;
+}
 
 export const DEFAULT_CATEGORY = 'random_hits';
 
@@ -72,34 +84,34 @@ export function buildCategoryPool(
   const playerLists = Object.values(histories);
   if (playerLists.length === 0) return [];
 
+  // Songs are matched by songKey, not by Spotify id: the same recording has
+  // a different id per release, so id matching double-counts songs in the
+  // unions and — fatally for heard_by_all — misses most real overlaps.
+  const keyOf = (t: HistoryTrack) => songKey(t.artist, t.title);
+  const union = (lists: HistoryTrack[][], include: (t: HistoryTrack) => boolean) => {
+    const byKey = new Map<string, HistoryTrack>();
+    for (const tracks of lists) {
+      for (const t of tracks) {
+        const key = keyOf(t);
+        if (include(t) && !byKey.has(key)) byKey.set(key, t);
+      }
+    }
+    return Array.from(byKey.values());
+  };
+
   switch (category) {
-    case 'heard_by_any': {
-      // Union across all players, deduped by track id
-      const byId = new Map<string, HistoryTrack>();
-      for (const tracks of playerLists) {
-        for (const t of tracks) {
-          if (!byId.has(t.id)) byId.set(t.id, t);
-        }
-      }
-      return Array.from(byId.values());
-    }
-    case 'well_known': {
+    case 'heard_by_any':
+      return union(playerLists, () => true);
+    case 'well_known':
       // Union of top tracks only
-      const byId = new Map<string, HistoryTrack>();
-      for (const tracks of playerLists) {
-        for (const t of tracks) {
-          if (t.isTop && !byId.has(t.id)) byId.set(t.id, t);
-        }
-      }
-      return Array.from(byId.values());
-    }
+      return union(playerLists, (t) => !!t.isTop);
     case 'heard_by_all': {
-      // Intersection: every lobby player must have the track in their history.
+      // Intersection: every lobby player must have the song in their history.
       // Players who haven't synced make the intersection empty by definition.
       if (allPlayerIds.some((pid) => !histories[pid]?.length)) return [];
       const [first, ...rest] = allPlayerIds.map((pid) => histories[pid]);
-      const restIds = rest.map((tracks) => new Set(tracks.map((t) => t.id)));
-      return first.filter((t) => restIds.every((ids) => ids.has(t.id)));
+      const restKeys = rest.map((tracks) => new Set(tracks.map(keyOf)));
+      return union([first], (t) => restKeys.every((keys) => keys.has(keyOf(t))));
     }
     default:
       return [];
@@ -137,9 +149,10 @@ export function getCategoryAvailability(
       continue;
     }
     const pool = buildCategoryPool(def.name, histories, allPlayerIds);
-    result[def.name] = pool.length >= MIN_CATEGORY_POOL
+    const min = minPoolFor(def.name);
+    result[def.name] = pool.length >= min
       ? { eligible: true, totalSongs: pool.length }
-      : { eligible: false, totalSongs: pool.length, reason: `Zu wenige Songs (${pool.length}/${MIN_CATEGORY_POOL})` };
+      : { eligible: false, totalSongs: pool.length, reason: `Zu wenige Songs (${pool.length}/${min})` };
   }
 
   return result;

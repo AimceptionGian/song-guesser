@@ -1,4 +1,4 @@
-import { DeezerCatalogProvider } from '../deezer-catalog-provider';
+import { DeezerCatalogProvider, DeezerUnavailableError } from '../deezer-catalog-provider';
 
 const mockTrackPayload = {
   id: 3135556,
@@ -160,6 +160,40 @@ describe('DeezerCatalogProvider', () => {
       expect(results[0].year).toBe(1982);
       // No per-track detail fetch — the caller corrects years via Spotify instead
       expect(fetchSpy).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('strict lookups (draw-time preview resolution)', () => {
+    const quotaBody = { error: { type: 'Exception', message: 'Quota limit exceeded', code: 4 } };
+
+    it('treats a quota error with HTTP 200 as unavailable, not as "no results"', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(JSON.stringify(quotaBody), { status: 200 })
+      );
+      await expect(provider.searchTracksOrThrow('test')).rejects.toBeInstanceOf(DeezerUnavailableError);
+    });
+
+    it('treats network failures and 5xx as unavailable', async () => {
+      vi.spyOn(globalThis, 'fetch')
+        .mockRejectedValueOnce(new Error('Network error'))
+        .mockResolvedValueOnce(new Response(null, { status: 503 }));
+      await expect(provider.searchTracksOrThrow('test')).rejects.toBeInstanceOf(DeezerUnavailableError);
+      await expect(provider.getTrackOrThrow('deezer-1')).rejects.toBeInstanceOf(DeezerUnavailableError);
+    });
+
+    it('reports a genuine miss as empty / null', async () => {
+      vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(new Response(JSON.stringify({ data: [], total: 0 }), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ error: { type: 'DataException', message: 'no data', code: 800 } }), { status: 200 }));
+      expect(await provider.searchTracksOrThrow('nothing')).toEqual([]);
+      expect(await provider.getTrackOrThrow('deezer-404')).toBeNull();
+    });
+
+    it('the lenient search still returns [] on a quota error', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(JSON.stringify(quotaBody), { status: 200 })
+      );
+      expect(await provider.searchTracks('test')).toEqual([]);
     });
   });
 });

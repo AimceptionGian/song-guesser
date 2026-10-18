@@ -90,12 +90,77 @@ function deezerToCatalogTrack(track: DeezerTrack): CatalogTrack {
   };
 }
 
+/**
+ * Deezer refused or failed the request (quota, overload, network, 5xx) —
+ * as opposed to answering "no such track". Retrying later can succeed.
+ */
+export class DeezerUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeezerUnavailableError';
+  }
+}
+
+// Deezer's "DataException: no data" — a genuine miss, not an outage.
+const DEEZER_NOT_FOUND_CODE = 800;
+
+interface DeezerErrorBody {
+  error?: { type?: string; message?: string; code?: number };
+}
+
 // ─── Deezer Catalog Provider ───
 
 export class DeezerCatalogProvider implements CatalogProvider {
   name = 'deezer';
 
   private baseUrl = 'https://api.deezer.com';
+
+  /**
+   * GET a Deezer API path, telling outages apart from misses. Deezer
+   * reports quota violations ("Quota limit exceeded", code 4) with HTTP 200
+   * and an `error` body; treating that as "nothing found" is what silently
+   * burned through decks and ended matches early.
+   * Returns null for a genuine miss, throws DeezerUnavailableError otherwise.
+   */
+  private async fetchStrict<T>(path: string): Promise<T | null> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, { headers: { 'Accept': 'application/json' } });
+    } catch (err) {
+      throw new DeezerUnavailableError(`network error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (res.status === 404) return null;
+    if (!res.ok) throw new DeezerUnavailableError(`HTTP ${res.status}`);
+
+    let body: T & DeezerErrorBody;
+    try {
+      body = (await res.json()) as T & DeezerErrorBody;
+    } catch {
+      throw new DeezerUnavailableError('unreadable response');
+    }
+    if (body?.error) {
+      if (body.error.code === DEEZER_NOT_FOUND_CODE) return null;
+      throw new DeezerUnavailableError(body.error.message ?? `error code ${body.error.code}`);
+    }
+    return body;
+  }
+
+  /**
+   * Search, throwing DeezerUnavailableError when Deezer can't answer
+   * (see fetchStrict). [] means Deezer answered and found nothing.
+   */
+  async searchTracksOrThrow(query: string, limit = 25): Promise<CatalogTrack[]> {
+    const body = await this.fetchStrict<DeezerSearchResult>(
+      `/search?q=${encodeURIComponent(query)}&limit=${Math.min(limit, 50)}`
+    );
+    return body?.data?.length ? body.data.map(deezerToCatalogTrack) : [];
+  }
+
+  /** Track by id, throwing DeezerUnavailableError when Deezer can't answer. */
+  async getTrackOrThrow(id: string): Promise<CatalogTrack | null> {
+    const track = await this.fetchStrict<DeezerTrack>(`/track/${id.replace(/^deezer-/, '')}`);
+    return track?.id ? deezerToCatalogTrack(track) : null;
+  }
 
   /**
    * Search tracks via Deezer API.
@@ -115,8 +180,12 @@ export class DeezerCatalogProvider implements CatalogProvider {
         return [];
       }
 
-      const body = (await res.json()) as DeezerSearchResult;
+      const body = (await res.json()) as DeezerSearchResult & DeezerErrorBody;
 
+      if (body.error) {
+        console.warn(`[DeezerCatalogProvider] search refused: ${body.error.message ?? body.error.code}`);
+        return [];
+      }
       if (!body.data || body.data.length === 0) return [];
 
       return body.data.map(deezerToCatalogTrack);

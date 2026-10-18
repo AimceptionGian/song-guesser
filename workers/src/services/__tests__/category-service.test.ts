@@ -5,6 +5,7 @@ import {
   buildCategoryPool,
   getCategoryAvailability,
   MIN_CATEGORY_POOL,
+  MIN_SHARED_POOL,
 } from '../category-service';
 import type { HistoryTrack } from '../../adapters/history-provider';
 
@@ -72,6 +73,37 @@ describe('category-service', () => {
       }, ['p1', 'p2']);
 
       expect(pool.map((t) => t.id)).toEqual(['both']);
+    });
+
+    it('heard_by_all: matches the same song across different Spotify releases', () => {
+      // Album cut vs. remastered single: different ids, decorated title
+      const pool = buildCategoryPool('heard_by_all', {
+        p1: [makeTrack('spotify-album', { artist: 'Queen', title: "Don't Stop Me Now" })],
+        p2: [makeTrack('spotify-remaster', { artist: 'Queen', title: "Don't Stop Me Now - Remastered 2011" })],
+        p3: [makeTrack('spotify-live', { artist: 'Queen, David Bowie', title: "Don't Stop Me Now (Live)" })],
+      }, ['p1', 'p2', 'p3']);
+
+      expect(pool).toHaveLength(1);
+    });
+
+    it('heard_by_any: one entry per song even with several releases', () => {
+      const pool = buildCategoryPool('heard_by_any', {
+        p1: [makeTrack('a1', { artist: 'a-ha', title: 'Take On Me' })],
+        p2: [makeTrack('a2', { artist: 'a-ha', title: 'Take On Me - 2015 Remaster' })],
+      }, ['p1', 'p2']);
+
+      expect(pool).toHaveLength(1);
+    });
+
+    it('heard_by_all: unlocks with a few shared songs', () => {
+      const shared = makeTracks(MIN_SHARED_POOL, 'shared');
+      const avail = getCategoryAvailability({
+        p1: [...shared, ...makeTracks(20, 'p1only')],
+        p2: [...shared, ...makeTracks(20, 'p2only')],
+      }, ['p1', 'p2']);
+
+      expect(avail.heard_by_all.eligible).toBe(true);
+      expect(avail.heard_by_all.totalSongs).toBe(MIN_SHARED_POOL);
     });
 
     it('heard_by_all: empty when any lobby player has no history', () => {

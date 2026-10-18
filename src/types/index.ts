@@ -44,8 +44,10 @@ export interface GameState {
   settings?: MatchSettings;
   /** Epoch ms (server clock) when the active player's answer time ends. */
   turnDeadline?: number | null;
-  /** Set while phase is 'buzzer'. */
+  /** Set while phase is 'buzzer' (buzzer mode). */
   buzzer?: BuzzerState | null;
+  /** Set while phase is 'snippet' (snippet mode). */
+  snippet?: SnippetState | null;
   /** Set while phase is 'reveal_vote' (speak mode). */
   voting?: VoteState | null;
   /** Server clock at response time — for drift-free countdowns. */
@@ -54,31 +56,58 @@ export interface GameState {
 
 export type GuessMode = 'type' | 'speak';
 
+/** timeline: Zug um Zug mit Jahr · buzzer: alle hören, wer zuerst buzzert · snippet: immer längere Ausschnitte */
+export type GameMode = 'timeline' | 'buzzer' | 'snippet';
+
 export interface MatchSettings {
+  gameMode?: GameMode;
   guessMode: GuessMode;
   answerTimeSec: number;
-  buzzerEnabled: boolean;
+}
+
+export interface BuzzAttempt {
+  playerId: string;
+  playerName: string;
+  artist: string;
+  title: string;
+  artistCorrect: boolean;
+  titleCorrect: boolean;
 }
 
 export interface BuzzerState {
-  openUntil: number;
+  /** null while someone is answering (the clock is frozen). */
+  openUntil: number | null;
+  remainingMs: number;
   winnerId: string | null;
   winnerName: string | null;
   answerDeadline: number | null;
+  lockedOut: string[];
+  attempts: BuzzAttempt[];
+}
+
+export interface SnippetState {
+  stage: number;
+  /** Snippet length per stage, in seconds. */
+  stages: number[];
+  deadline: number;
+  guessed: string[];
+  solved: Record<string, { stage: number; points: number }>;
+  feedback: Record<string, { artist: string; title: string; artistCorrect: boolean; titleCorrect: boolean }>;
+}
+
+export interface SnippetPlayerResult {
+  playerId: string;
+  playerName: string;
+  solvedAtSec: number | null;
+  points: number;
+  lastArtist: string;
+  lastTitle: string;
 }
 
 export interface VoteState {
   deadline: number;
   voterIds: string[];
   votes: Record<string, { artistOk: boolean; titleOk: boolean }>;
-}
-
-export interface StealResult {
-  playerId: string;
-  playerName: string;
-  guess: string;
-  field: 'artist' | 'title' | null;
-  points: number;
 }
 
 export interface LiveInput {
@@ -108,7 +137,10 @@ export interface RoundReveal {
   yearDiff: number;
   points: number;
   timedOut?: boolean;
-  steal?: StealResult | null;
+  /** Absent = timeline. */
+  mode?: GameMode;
+  buzz?: { winnerId: string | null; winnerName: string | null; attempts: BuzzAttempt[] } | null;
+  snippetResults?: SnippetPlayerResult[] | null;
 }
 
 export interface RoundResult {

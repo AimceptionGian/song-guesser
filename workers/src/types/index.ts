@@ -24,6 +24,7 @@ export type CommandType =
   | 'resolve_turn'
   | 'buzz'
   | 'buzzer_answer'
+  | 'snippet_guess'
   | 'vote_reveal'
   | 'end_match';
 
@@ -48,21 +49,28 @@ export interface LobbySettings {
   maxPoints: number;
   timelineOnlyScoring: boolean;
   yearRange: { min: number; max: number };
-  /** How artist/title answers are given: typed (auto-graded) or spoken aloud (graded by the other players' votes). */
+  /** Which game is played — see GameMode. */
+  gameMode: GameMode;
+  /** Timeline mode: how artist/title answers are given — typed (auto-graded) or spoken aloud (graded by the other players' votes). */
   guessMode: GuessMode;
-  /** Answer time limit in seconds for the active player; 0 = no limit. */
+  /** Timeline mode: answer time limit in seconds for the active player; 0 = no limit. */
   answerTimeSec: number;
-  /** After the active player's time runs out, others may buzz to steal 1 point. Needs answerTimeSec > 0 and guessMode 'type'. */
-  buzzerEnabled: boolean;
 }
+
+/**
+ * - timeline: turn-based — the active player names artist/title and places the year on their timeline
+ * - buzzer:   everyone listens; first to buzz names artist AND title for 1 point, a miss hands the buzzer to the others
+ * - snippet:  everyone guesses from ever longer snippets (0.1s → 15s); the shorter the snippet, the more points
+ */
+export type GameMode = 'timeline' | 'buzzer' | 'snippet';
 
 export type GuessMode = 'type' | 'speak';
 
 /** The subset of lobby settings the match state machine needs. */
 export interface MatchSettings {
+  gameMode: GameMode;
   guessMode: GuessMode;
   answerTimeSec: number;
-  buzzerEnabled: boolean;
 }
 
 export interface PlayerProfile {
@@ -89,22 +97,57 @@ export interface MatchState {
   settings: MatchSettings;
   /** Epoch ms when the active player's answer time ends; null = no limit. */
   turnDeadline?: number | null;
-  /** Set while phase is 'buzzer': who may steal and until when. */
+  /** Set while phase is 'buzzer' (buzzer mode): who may buzz and until when. */
   buzzer?: BuzzerState | null;
+  /** Set while phase is 'snippet' (snippet mode): the current stage and guesses. */
+  snippet?: SnippetState | null;
   /** Set while phase is 'reveal_vote' (speak mode): the running vote. */
   voting?: VoteState | null;
   /** Set while phase is 'round_result': the reveal everyone should see. */
   lastResult?: RoundReveal | null;
+  /** cardKeys of every card dealt so far, so a deck refill never repeats one. */
+  drawnKeys?: string[];
 }
 
-/** Buzzer window after the active player's time ran out. */
+/** Buzzer mode: one song, everyone may buzz until someone names it. */
 export interface BuzzerState {
-  /** Epoch ms until which players may buzz. */
-  openUntil: number;
+  /** Epoch ms until which players may buzz; null while someone is answering. */
+  openUntil: number | null;
+  /** Buzz time left, frozen while the buzz winner answers. */
+  remainingMs: number;
   winnerId: string | null;
   winnerName: string | null;
-  /** Epoch ms until which the buzzer winner may answer. */
+  /** Epoch ms until which the buzz winner may answer. */
   answerDeadline: number | null;
+  /** Players who already missed this song and may not buzz again. */
+  lockedOut: string[];
+  /** Every answer given on this song, in order. */
+  attempts: BuzzAttempt[];
+}
+
+export interface BuzzAttempt {
+  playerId: string;
+  playerName: string;
+  artist: string;
+  title: string;
+  artistCorrect: boolean;
+  titleCorrect: boolean;
+}
+
+/** Snippet mode: everyone guesses from ever longer snippets of the song. */
+export interface SnippetState {
+  /** Index into SNIPPET_STAGES_SEC. */
+  stage: number;
+  /** Snippet length per stage, in seconds. */
+  stages: number[];
+  /** Epoch ms when the current stage closes even if not everyone guessed. */
+  deadline: number;
+  /** Players who already guessed in the current stage (or passed). */
+  guessed: string[];
+  /** Players who named artist AND title, with the stage and points. */
+  solved: Record<string, { stage: number; points: number }>;
+  /** Per player: what their latest guess got right, so they can build on it. */
+  feedback: Record<string, { artist: string; title: string; artistCorrect: boolean; titleCorrect: boolean }>;
 }
 
 /** Speak mode: the other players decide whether artist/title were said correctly. */
@@ -132,18 +175,22 @@ export interface RoundReveal {
   points: number;
   /** True when the guess was auto-submitted because the answer time ran out. */
   timedOut?: boolean;
-  /** Set when a buzzer player stole a point (or tried to). */
-  steal?: StealResult | null;
+  /** Which game produced this reveal; absent = timeline. */
+  mode?: GameMode;
+  /** Buzzer mode: who named the song (if anyone) and every attempt. */
+  buzz?: { winnerId: string | null; winnerName: string | null; attempts: BuzzAttempt[] } | null;
+  /** Snippet mode: how every player did on this song. */
+  snippetResults?: SnippetPlayerResult[] | null;
 }
 
-/** Outcome of a buzzer steal attempt. */
-export interface StealResult {
+export interface SnippetPlayerResult {
   playerId: string;
   playerName: string;
-  guess: string;
-  /** Which field the steal matched; null = missed. */
-  field: 'artist' | 'title' | null;
+  /** Snippet length (seconds) at which they named the song; null = never. */
+  solvedAtSec: number | null;
   points: number;
+  lastArtist: string;
+  lastTitle: string;
 }
 
 /** Transient playback state, controlled by the active player. */
@@ -170,6 +217,7 @@ export type MatchPhase =
   | 'guessing'
   | 'evaluating'
   | 'buzzer'
+  | 'snippet'
   | 'reveal_vote'
   | 'round_result'
   | 'finished';

@@ -7,15 +7,17 @@ import {
   clearLobbySession,
   saveHistoryCache,
   getHistoryCache,
+  getHistoryCacheVersion,
   getLobbyPrefs,
   saveLobbyPrefs,
 } from '../services/api-client';
-import type { CategoryInfo, CategoryAvailability, LobbyPrefs } from '../services/api-client';
+import type { CategoryInfo, CategoryAvailability, LobbyPrefs, GameMode } from '../services/api-client';
 import {
   beginSpotifyAuth,
   exchangeCodeForToken,
   getPendingAuth,
   clearPendingAuth,
+  HISTORY_VERSION,
 } from '../services/spotify-auth';
 
 type LobbyPhase = 'form' | 'lobby';
@@ -25,6 +27,33 @@ const DEFAULT_CATEGORY = 'random_hits';
 
 // Akzentfarbe pro Kategorie-Kachel — gibt jeder Kachel ihren eigenen Charakter
 const CATEGORY_ACCENTS = ['var(--lime)', 'var(--pink)', 'var(--cyan)', 'var(--orange)'];
+
+const GAME_MODE_INFO: Array<{ mode: GameMode; emoji: string; label: string; short: string; rules: string; accent: string }> = [
+  {
+    mode: 'timeline',
+    emoji: '📅',
+    label: 'Timeline',
+    short: 'Zug um Zug, mit Jahr',
+    rules: 'Wer am Zug ist, rät Interpret, Titel und Jahr und legt den Song in seine Timeline. Bis zu 4 Punkte pro Karte.',
+    accent: 'var(--lime)',
+  },
+  {
+    mode: 'buzzer',
+    emoji: '🔔',
+    label: 'Buzzer',
+    short: 'Wer zuerst buzzert',
+    rules: 'Alle hören mit. Wer zuerst buzzert, nennt Interpret UND Titel — nur beides zusammen gibt 1 Punkt. Daneben? Dann dürfen die anderen buzzern.',
+    accent: 'var(--pink)',
+  },
+  {
+    mode: 'snippet',
+    emoji: '⏱️',
+    label: 'Snippet',
+    short: '0,1 s bis 15 s',
+    rules: 'Alle raten gleichzeitig, erst nach 0,1 s, dann 0,5 · 2 · 8 · 15 s. Je kürzer der Ausschnitt beim Treffer (Interpret + Titel), desto mehr Punkte: 5 · 4 · 3 · 2 · 1.',
+    accent: 'var(--cyan)',
+  },
+];
 
 export default function LobbyScreen() {
   const navigate = useNavigate();
@@ -54,9 +83,9 @@ export default function LobbyScreen() {
     totalRounds: number;
     maxPoints: number;
     yearRange: { min: number; max: number };
+    gameMode: GameMode;
     guessMode: 'type' | 'speak';
     answerTimeSec: number;
-    buzzerEnabled: boolean;
   } | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -67,6 +96,8 @@ export default function LobbyScreen() {
   const [categoryAvailability, setCategoryAvailability] = useState<Record<string, CategoryAvailability>>({});
   const [playersWithHistory, setPlayersWithHistory] = useState<string[]>([]);
   const [historyStatus, setHistoryStatus] = useState<HistoryStatus>('idle');
+  // The auto-imported cache predates the richer history sync
+  const [historyOutdated, setHistoryOutdated] = useState(false);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -88,7 +119,7 @@ export default function LobbyScreen() {
           yearRange: lobby.settings.yearRange,
           guessMode: lobby.settings.guessMode ?? 'type',
           answerTimeSec: lobby.settings.answerTimeSec ?? 0,
-          buzzerEnabled: lobby.settings.buzzerEnabled ?? false,
+          gameMode: lobby.settings.gameMode ?? 'timeline',
         });
         setSelectedCategory(lobby.category ?? DEFAULT_CATEGORY);
         setCategoryAvailability(lobby.categoryAvailability ?? {});
@@ -139,6 +170,7 @@ export default function LobbyScreen() {
     api.importCachedHistory({ playerId, lobbyCode, tracks: cached })
       .then(() => {
         setHistoryStatus('done');
+        setHistoryOutdated(getHistoryCacheVersion() < HISTORY_VERSION);
         setPlayersWithHistory((prev) => [...new Set([...prev, playerId])]);
       })
       .catch(() => setHistoryStatus('idle'));
@@ -196,8 +228,9 @@ export default function LobbyScreen() {
           lobbyCode: pending.lobbyCode,
         });
         // Cache locally so future lobbies can import without re-auth
-        if (result.trackList?.length) saveHistoryCache(result.trackList);
+        if (result.trackList?.length) saveHistoryCache(result.trackList, HISTORY_VERSION);
         setHistoryStatus('done');
+        setHistoryOutdated(false);
         setPlayersWithHistory((prev) => [...new Set([...prev, pending.playerId])]);
         console.log(`[Spotify] ${result.tracks} Songs synchronisiert`);
       } catch (err) {
@@ -277,7 +310,7 @@ export default function LobbyScreen() {
           yearRange: { min: 1960, max: 2024 },
           guessMode: prefs.guessMode,
           answerTimeSec: prefs.answerTimeSec,
-          buzzerEnabled: prefs.buzzerEnabled,
+          gameMode: prefs.gameMode,
         },
       });
       setLobbyCode(result.code);
@@ -375,24 +408,16 @@ export default function LobbyScreen() {
   const handleChangeSetting = async (patch: Partial<LobbyPrefs>) => {
     if (!isHost || !lobbySettings) return;
     const next = { ...lobbySettings, ...patch };
-    // Buzzer needs a running clock and typed answers
-    if (next.answerTimeSec === 0 || next.guessMode === 'speak') {
-      next.buzzerEnabled = false;
-    }
     setLobbySettings(next); // optimistic
-    saveLobbyPrefs({
+    const prefs: LobbyPrefs = {
       totalRounds: next.totalRounds,
+      gameMode: next.gameMode,
       guessMode: next.guessMode,
       answerTimeSec: next.answerTimeSec,
-      buzzerEnabled: next.buzzerEnabled,
-    });
+    };
+    saveLobbyPrefs(prefs);
     try {
-      await api.updateSettings(lobbyCode, {
-        totalRounds: next.totalRounds,
-        guessMode: next.guessMode,
-        answerTimeSec: next.answerTimeSec,
-        buzzerEnabled: next.buzzerEnabled,
-      });
+      await api.updateSettings(lobbyCode, prefs);
     } catch {
       setError('Einstellung konnte nicht gespeichert werden.');
     }
@@ -414,6 +439,8 @@ export default function LobbyScreen() {
           playerCount: lobbyPlayers.length,
         }
       : { totalRounds: 5, maxPoints: 4, yearRange: 64, playerCount: 0 };
+
+  const isTimeline = (lobbySettings?.gameMode ?? 'timeline') === 'timeline';
 
   // ─── Lobby Waiting Room ───
   // Mobil: eine gestapelte Flex-Spalte (unverändert). Ab Desktop-Breite
@@ -522,12 +549,33 @@ export default function LobbyScreen() {
                     {isSelf && <span className="sticker" style={{ fontSize: '0.52rem', padding: '3px 7px' }}>Du</span>}
                     <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
                       {hasHistory ? (
-                        <span title="Spotify verbunden" style={{
-                          fontFamily: 'var(--font-mono)', fontSize: '0.66rem', fontWeight: 600,
-                          padding: '3px 9px', borderRadius: 999,
-                          background: 'rgba(30,215,96,0.14)', color: 'var(--green)',
-                          border: '1px solid rgba(30,215,96,0.3)',
-                        }}>✓ SPOTIFY</span>
+                        <>
+                          <span title="Spotify verbunden" style={{
+                            fontFamily: 'var(--font-mono)', fontSize: '0.66rem', fontWeight: 600,
+                            padding: '3px 9px', borderRadius: 999,
+                            background: 'rgba(30,215,96,0.14)', color: 'var(--green)',
+                            border: '1px solid rgba(30,215,96,0.3)',
+                          }}>✓ SPOTIFY</span>
+                          {/* Eigene History neu laden — z.B. um nach einem Update
+                              mehr Songs (gelikte Songs, alle Zeiträume) zu holen */}
+                          {isSelf && historyStatus !== 'syncing' && (
+                            <button
+                              onClick={handleConnectSpotify}
+                              title={historyOutdated
+                                ? 'Spotify neu verbinden — lädt deutlich mehr Songs (wichtig für „Alle kennen ihn")'
+                                : 'Spotify-History neu laden'}
+                              style={{
+                                fontFamily: 'var(--font-mono)', fontSize: '0.62rem', fontWeight: 600,
+                                padding: '3px 8px', borderRadius: 999, cursor: 'pointer',
+                                border: historyOutdated ? 'none' : '1px solid var(--line-strong)',
+                                background: historyOutdated ? 'var(--gold)' : 'transparent',
+                                color: historyOutdated ? '#0b0a12' : 'var(--muted)',
+                              }}
+                            >
+                              {historyOutdated ? '↻ MEHR SONGS' : '↻'}
+                            </button>
+                          )}
+                        </>
                       ) : isSelf ? (
                         <button
                           onClick={handleConnectSpotify}
@@ -557,9 +605,50 @@ export default function LobbyScreen() {
 
         <div className="lobby-col lobby-col-right">
 
+        {/* Spielmodus */}
+        <section className="fade-up lobby-section lobby-mode" style={{ animationDelay: '0.12s' }}>
+          <SectionHeading index="02" title={isHost ? 'Spielmodus wählen' : 'Spielmodus'} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+            {GAME_MODE_INFO.map((m) => {
+              const selected = (lobbySettings?.gameMode ?? 'timeline') === m.mode;
+              return (
+                <button
+                  key={m.mode}
+                  onClick={() => isHost && !selected && handleChangeSetting({ gameMode: m.mode })}
+                  disabled={!isHost}
+                  aria-pressed={selected}
+                  style={{
+                    textAlign: 'left', padding: '12px 10px 10px', borderRadius: 14, minWidth: 0,
+                    border: selected ? `2px solid ${m.accent}` : '1px solid var(--line)',
+                    background: selected
+                      ? `linear-gradient(160deg, color-mix(in srgb, ${m.accent} 12%, var(--bg-2)), var(--bg-2))`
+                      : 'var(--bg-2)',
+                    cursor: isHost && !selected ? 'pointer' : 'default',
+                    transition: 'border-color 0.15s, background 0.15s',
+                  }}
+                >
+                  <div style={{ fontSize: 22, marginBottom: 4 }}>{m.emoji}</div>
+                  <div
+                    className="display"
+                    style={{ color: selected ? m.accent : 'var(--ink)', fontSize: '0.74rem', letterSpacing: '0.02em' }}
+                  >
+                    {m.label}
+                  </div>
+                  <div style={{ color: 'var(--muted)', fontSize: '0.64rem', marginTop: 3, lineHeight: 1.4 }}>
+                    {m.short}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <div className="panel-inset" style={{ marginTop: 8, padding: '9px 12px', color: 'var(--muted)', fontSize: '0.74rem', lineHeight: 1.5 }}>
+            {GAME_MODE_INFO.find((m) => m.mode === (lobbySettings?.gameMode ?? 'timeline'))?.rules}
+          </div>
+        </section>
+
         {/* Kategorie */}
         <section className="fade-up lobby-section lobby-category" style={{ animationDelay: '0.14s' }}>
-          <SectionHeading index="02" title={isHost ? 'Kategorie wählen' : 'Kategorie'} />
+          <SectionHeading index="03" title={isHost ? 'Kategorie wählen' : 'Kategorie'} />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             {categories.map((cat, idx) => {
               const avail = categoryAvailability[cat.name];
@@ -634,14 +723,23 @@ export default function LobbyScreen() {
 
         {/* Regeln */}
         <section className="fade-up lobby-section lobby-rules" style={{ animationDelay: '0.18s' }}>
-          <SectionHeading index="03" title={isHost ? 'Regeln' : 'Regeln (nur Host)'} />
+          <SectionHeading index="04" title={isHost ? 'Regeln' : 'Regeln (nur Host)'} />
           <div className="lobby-rules-grid" style={{ display: 'grid', gap: 10 }}>
 
             {/* Karten pro Spieler */}
             <div style={settingRowStyle}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{ fontSize: 20 }}>🃏</span>
-                <span style={{ color: 'var(--muted)', fontSize: '0.85rem', fontWeight: 500 }}>Karten pro Spieler</span>
+                <div>
+                  <div style={{ color: 'var(--muted)', fontSize: '0.85rem', fontWeight: 500 }}>
+                    {isTimeline ? 'Karten pro Spieler' : 'Songs pro Spieler'}
+                  </div>
+                  {!isTimeline && lobbyPlayers.length > 1 && (
+                    <div style={{ color: 'var(--dim)', fontSize: '0.68rem', marginTop: 2 }}>
+                      Reihum wird gezogen · {displayInfo.totalRounds * lobbyPlayers.length} Songs gesamt
+                    </div>
+                  )}
+                </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 {isHost && (
@@ -668,6 +766,9 @@ export default function LobbyScreen() {
               </div>
             </div>
 
+            {/* Rate-Modus und Antwortzeit gibt es nur in der Timeline — Buzzer
+                und Snippet haben ihre eigenen, festen Zeitfenster */}
+            {isTimeline && (<>
             {/* Rate-Modus: tippen vs. ansagen */}
             <div style={settingRowStyle}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -718,30 +819,7 @@ export default function LobbyScreen() {
               </div>
             </div>
 
-            {/* Buzzer */}
-            <div style={{
-              ...settingRowStyle,
-              opacity: (lobbySettings?.answerTimeSec ?? 0) > 0 && (lobbySettings?.guessMode ?? 'type') === 'type' ? 1 : 0.45,
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 20 }}>🔔</span>
-                <div>
-                  <div style={{ color: 'var(--muted)', fontSize: '0.85rem', fontWeight: 500 }}>Buzzer</div>
-                  <div style={{ color: 'var(--dim)', fontSize: '0.68rem', marginTop: 2 }}>
-                    {(lobbySettings?.answerTimeSec ?? 0) === 0
-                      ? 'Braucht eine Antwortzeit'
-                      : (lobbySettings?.guessMode ?? 'type') === 'speak'
-                        ? 'Nur im Tipp-Modus'
-                        : 'Nach Zeitablauf: 1 Punkt klauen'}
-                  </div>
-                </div>
-              </div>
-              <button
-                className={`chip${lobbySettings?.buzzerEnabled ? ' active' : ''}`}
-                disabled={!isHost || (lobbySettings?.answerTimeSec ?? 0) === 0 || (lobbySettings?.guessMode ?? 'type') === 'speak'}
-                onClick={() => handleChangeSetting({ buzzerEnabled: !lobbySettings?.buzzerEnabled })}
-              >{lobbySettings?.buzzerEnabled ? 'An' : 'Aus'}</button>
-            </div>
+            </>)}
           </div>
         </section>
         </div>
@@ -890,7 +968,7 @@ export default function LobbyScreen() {
         display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '8px 22px',
         animationDelay: '0.36s', maxWidth: 420,
       }}>
-        {['♫ Spotify-History', '🃏 Timeline-Duell', '🔔 Buzzer-Steals'].map((f) => (
+        {['♫ Spotify-History', '🃏 Timeline-Duell', '🔔 Buzzer-Duell'].map((f) => (
           <span key={f} style={{
             fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--dim)',
             textTransform: 'uppercase', letterSpacing: '0.1em',

@@ -4,6 +4,8 @@ import {
   buildRandomHitsDeck,
   buildHistoryDeck,
   buildDeck,
+  buildRefillCards,
+  cardKey,
   deckSizeFor,
   mergeDeduped,
   orderByFreshness,
@@ -322,6 +324,77 @@ describe('deck-service', () => {
       expect(getProvider).not.toHaveBeenCalled();
       // Multi-artist history strings search with the primary artist only
       expect(deck![0].previewQuery).toMatch(/^Artist One Song \d+$/);
+    });
+  });
+
+  describe('buildHistoryDeck — heard_by_all top-up', () => {
+    const track = (id: string, title: string) => ({
+      id, title, artist: `Artist ${title}`,
+      playedAt: new Date().toISOString(), source: 'spotify' as const, year: 2001,
+    });
+
+    it('tops a small shared pool up with songs one player knows, shared songs drawn first', async () => {
+      const shared = Array.from({ length: 5 }, (_, i) => track(`s${i}`, `Shared ${i}`));
+      const p1Only = Array.from({ length: 20 }, (_, i) => track(`a${i}`, `Only A ${i}`));
+      const p2Only = Array.from({ length: 20 }, (_, i) => track(`b${i}`, `Only B ${i}`));
+      vi.spyOn(historyStore.DurableObjectHistoryStore.prototype, 'getHistories').mockResolvedValueOnce({
+        p1: [...shared, ...p1Only],
+        p2: [...shared, ...p2Only],
+      });
+
+      const lobby = makeLobby({
+        players: [
+          { id: 'p1', name: 'A', avatar: '', joinedAt: 0 },
+          { id: 'p2', name: 'B', avatar: '', joinedAt: 0 },
+        ],
+      });
+      const deck = await buildHistoryDeck(NO_SPOTIFY_ENV, lobby, 'heard_by_all', 20);
+
+      expect(deck).toHaveLength(20);
+      // The match pops from the end — the 5 shared songs must come up first
+      const drawOrder = [...deck!].reverse();
+      expect(drawOrder.slice(0, 5).every((c) => c.title.startsWith('Shared'))).toBe(true);
+    });
+  });
+
+  describe('buildDeck — short history pools', () => {
+    it('pads a history deck to the full match size so the match cannot run dry', async () => {
+      const tracks = Array.from({ length: 12 }, (_, i) => ({
+        id: `spotify-${i}`, title: `History ${i}`, artist: `Artist ${i}`,
+        playedAt: new Date().toISOString(), source: 'spotify' as const, year: 2000,
+      }));
+      vi.spyOn(historyStore.DurableObjectHistoryStore.prototype, 'getHistories').mockResolvedValueOnce({ p1: tracks });
+      vi.spyOn(historyStore.DurableObjectRecentPickStore.prototype, 'getRecentKeys').mockResolvedValue([]);
+      vi.spyOn(historyStore.DurableObjectRecentPickStore.prototype, 'rememberKeys').mockResolvedValue();
+
+      const lobby = makeLobby({ category: 'heard_by_any' });
+      const deck = await buildDeck(NO_SPOTIFY_ENV, lobby);
+
+      expect(deck).toHaveLength(deckSizeFor(lobby));
+      // History songs are drawn before the padding
+      const drawOrder = [...deck!].reverse();
+      expect(drawOrder.slice(0, 12).every((c) => c.title.startsWith('History'))).toBe(true);
+    });
+
+    it('falls back to random hits when reading the histories fails', async () => {
+      vi.spyOn(historyStore.DurableObjectHistoryStore.prototype, 'getHistories').mockRejectedValueOnce(new Error('down'));
+      vi.spyOn(historyStore.DurableObjectRecentPickStore.prototype, 'getRecentKeys').mockResolvedValue([]);
+      vi.spyOn(historyStore.DurableObjectRecentPickStore.prototype, 'rememberKeys').mockResolvedValue();
+      vi.spyOn(catalogService, 'getChartTracks').mockResolvedValue([]);
+
+      const deck = await buildDeck(NO_SPOTIFY_ENV, makeLobby({ category: 'heard_by_all' }));
+      expect(deck!.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('buildRefillCards', () => {
+    it('only deals songs the match has not had yet', () => {
+      const first = buildRefillCards(30, new Set());
+      const exclude = new Set(first.map(cardKey));
+      const second = buildRefillCards(30, exclude);
+
+      expect(second).toHaveLength(30);
+      expect(second.some((c) => exclude.has(cardKey(c)))).toBe(false);
     });
   });
 

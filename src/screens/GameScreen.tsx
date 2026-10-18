@@ -4,10 +4,11 @@ import Timeline from '../components/Timeline';
 import type { PlacedCardInfo } from '../components/Timeline';
 import AudioPlayer from '../components/AudioPlayer';
 import Scoreboard from '../components/Scoreboard';
+import { BuzzerRound, SnippetRound, SharedRevealDetails, ownSharedPoints } from '../components/SharedRounds';
 import { MIN_YEAR, MAX_YEAR } from '../constants';
 import { api, getLobbySession, clearLobbySession } from '../services/api-client';
 import { sfx, isSfxMuted, setSfxMuted } from '../services/sfx';
-import type { Song, Player, LiveInput, PlaybackState, RoundReveal, MatchSettings, BuzzerState, VoteState } from '../types';
+import type { Song, Player, LiveInput, PlaybackState, RoundReveal, MatchSettings, BuzzerState, SnippetState, VoteState } from '../types';
 
 /** Wie lange die Track-Nummer stehen bleibt, bevor der Vorhang aufgeht. */
 const INTRO_HOLD_MS = 1100;
@@ -22,6 +23,19 @@ const INTRO_LOADING_TIMEOUT_MS = 15000;
  * 'leaving'  — Vorhang blendet aus
  */
 type IntroStage = 'loading' | 'reveal' | 'leaving';
+
+/** Phases in which a song is on the table (one per game mode). */
+const CARD_PHASES = new Set(['guessing', 'buzzer', 'snippet']);
+/** Everyone races in these phases — poll faster so a buzz shows up quickly. */
+const FAST_POLL_PHASES = new Set(['buzzer', 'snippet']);
+const POLL_MS = 1500;
+const FAST_POLL_MS = 600;
+
+/** Recoverable draw failures: the phase stays 'drawing', the player can just retry. */
+const DRAW_ERRORS: Record<string, string> = {
+  PREVIEW_UNAVAILABLE: 'Der Musikdienst ist gerade überlastet — zieh einfach nochmal.',
+  NO_PLAYABLE_CARD: 'Für die nächsten Songs gab es keine Hörprobe — zieh einfach nochmal.',
+};
 
 /** Backend players carry {card}; the frontend expects {song}. */
 function convertPlayers(state: any): Player[] {
@@ -59,11 +73,11 @@ export default function GameScreen() {
   const [settings, setSettings] = useState<MatchSettings | null>(null);
   const [turnDeadline, setTurnDeadline] = useState<number | null>(null);
   const [buzzer, setBuzzer] = useState<BuzzerState | null>(null);
+  const [snippet, setSnippet] = useState<SnippetState | null>(null);
   const [voting, setVoting] = useState<VoteState | null>(null);
   // Server-clock offset (serverNow - clientNow) so countdowns don't drift
   const clockOffsetRef = useRef(0);
   const [nowTick, setNowTick] = useState(Date.now());
-  const [buzzerGuess, setBuzzerGuess] = useState('');
   const [myVote, setMyVote] = useState<{ artistOk: boolean; titleOk: boolean } | null>(null);
   const [voteSent, setVoteSent] = useState(false);
   const [sfxMuted, setSfxMutedState] = useState(isSfxMuted);
@@ -74,6 +88,9 @@ export default function GameScreen() {
 
   const currentPlayer = players[currentPlayerIndex] || players[0];
   const speakMode = settings?.guessMode === 'speak';
+  const gameMode = settings?.gameMode ?? 'timeline';
+  // Buzzer and snippet: everyone guesses every song, no personal timeline
+  const sharedMode = gameMode !== 'timeline';
 
   // Own identity from the lobby session; only valid for this game's code.
   // Without a session (direct URL / solo flow) everything stays enabled.
@@ -81,6 +98,8 @@ export default function GameScreen() {
   const selfId = session && session.code === gameCode ? session.playerId : null;
   const isMyTurn = !selfId || players.length === 0 || players[currentPlayerIndex]?.id === selfId;
   const activePlayerName = players[currentPlayerIndex]?.name ?? '…';
+  // Who this device acts as in the shared modes (solo / direct URL: player 1)
+  const actorId = selfId ?? players[0]?.id ?? null;
 
   // ─── Sync placedYears from current player's placedCards ───
   useEffect(() => {
@@ -129,6 +148,16 @@ export default function GameScreen() {
           })));
         }
         if (lobby.settings?.totalRounds) setTotalRounds(lobby.settings.totalRounds);
+        // The match state carries the rules once the first card is drawn;
+        // until then the lobby's say which game this is (e.g. no timeline
+        // before the first song of a buzzer match).
+        if (lobby.settings) {
+          setSettings((cur) => cur ?? {
+            gameMode: lobby.settings.gameMode ?? 'timeline',
+            guessMode: lobby.settings.guessMode ?? 'type',
+            answerTimeSec: lobby.settings.answerTimeSec ?? 0,
+          });
+        }
       } catch {
         if (!cancelled) setError('Backend nicht erreichbar. Starte das Backend mit `npx wrangler dev` im workers/ Ordner.');
       }
@@ -158,11 +187,12 @@ export default function GameScreen() {
     if (state.settings) setSettings(state.settings as MatchSettings);
     setTurnDeadline((state.turnDeadline as number | undefined) ?? null);
     setBuzzer((state.buzzer as BuzzerState | undefined) ?? null);
+    setSnippet((state.snippet as SnippetState | undefined) ?? null);
     setVoting((state.voting as VoteState | undefined) ?? null);
     if (typeof state.serverNow === 'number') {
       clockOffsetRef.current = state.serverNow - Date.now();
     }
-    if (state.phase === 'guessing' && state.currentCard) {
+    if (CARD_PHASES.has(state.phase) && state.currentCard) {
       setCurrentCard(state.currentCard as Song);
       setSelectedCard(state.currentCard as Song);
     }
@@ -177,13 +207,19 @@ export default function GameScreen() {
   }, []);
 
   // ─── Poll game state so spectators follow the active player live ───
+  // Faster while everyone races (buzzer/snippet): a buzz must show up on the
+  // other phones before they buzz into an answer that's already taken.
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
   useEffect(() => {
     if (!gameCode) return;
-    const id = setInterval(async () => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
       try {
         const state = await api.getGameState(gameCode);
         const stateAny = state as any;
-        if (stateAny.players) {
+        if (!stopped && stateAny.players) {
           syncState(state);
           setGameStarted(true);
           setLiveInput(stateAny.liveInput ?? null);
@@ -192,8 +228,10 @@ export default function GameScreen() {
       } catch {
         // Match not started yet — keep waiting
       }
-    }, 1500);
-    return () => clearInterval(id);
+      if (!stopped) timer = setTimeout(tick, FAST_POLL_PHASES.has(phaseRef.current) ? FAST_POLL_MS : POLL_MS);
+    };
+    timer = setTimeout(tick, POLL_MS);
+    return () => { stopped = true; clearTimeout(timer); };
   }, [gameCode, syncState]);
 
   // ─── Game over: everyone moves to the final screen immediately ───
@@ -230,6 +268,7 @@ export default function GameScreen() {
   const activeDeadline =
     phase === 'guessing' ? turnDeadline
     : phase === 'buzzer' ? (buzzer?.winnerId ? buzzer?.answerDeadline : buzzer?.openUntil) ?? null
+    : phase === 'snippet' ? snippet?.deadline ?? null
     : phase === 'reveal_vote' ? voting?.deadline ?? null
     : null;
 
@@ -247,6 +286,11 @@ export default function GameScreen() {
     return () => clearInterval(id);
   }, [activeDeadline, gameCode, syncState]);
 
+  /** Points shown big on the reveal: the guesser's, or in shared modes your own. */
+  const revealPoints = roundResult
+    ? (sharedMode ? ownSharedPoints(roundResult, actorId) : roundResult.points)
+    : 0;
+
   /** Seconds left on the active deadline (server clock), or null. */
   const secondsLeft = activeDeadline
     ? Math.max(0, Math.ceil((activeDeadline - (nowTick + clockOffsetRef.current)) / 1000))
@@ -255,7 +299,6 @@ export default function GameScreen() {
   // Reset per-turn transients whenever a new card/turn begins
   useEffect(() => {
     if (phase === 'drawing' || phase === 'guessing') {
-      setBuzzerGuess('');
       setMyVote(null);
       setVoteSent(false);
     }
@@ -277,7 +320,9 @@ export default function GameScreen() {
     prevPhaseRef.current = phase;
     if (prev === phase) return;
 
-    if (phase === 'guessing') {
+    // Entering a card phase from anywhere else (a spectator's poll may skip
+    // 'drawing' entirely when the next card is drawn between two polls)
+    if (CARD_PHASES.has(phase) && !CARD_PHASES.has(prev)) {
       // Karte ist da: Der Vorhang steht bereits, jetzt fliegt die Track-Nummer
       // ein — einmalig, weil nur sie neu dazukommt und der Vorhang bleibt.
       sfx.draw();
@@ -292,9 +337,8 @@ export default function GameScreen() {
       // laufenden Ladevorgang — sonst bliebe die Seite blockiert.
       setIntro((cur) => (cur?.stage === 'loading' ? null : cur));
     }
-    if (phase === 'round_result' && roundResult) sfx.reveal(roundResult.points);
+    if (phase === 'round_result' && roundResult) sfx.reveal(revealPoints);
     if (phase === 'reveal_vote') sfx.click();
-    if (phase === 'buzzer') sfx.buzzerOpen();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
@@ -365,16 +409,16 @@ export default function GameScreen() {
         const startRes = await api.startMatch(gameCode);
         if (startRes.state) syncState(startRes.state);
         setGameStarted(true);
+      }
 
-        // Now draw the first card
-        const drawRes = await api.drawCard(gameCode, selfId ?? undefined);
-        if (drawRes.state) syncState(drawRes.state);
-        setIsLoading(false);
-      } else {
-        // Match is running — just draw
-        const drawRes = await api.drawCard(gameCode, selfId ?? undefined);
-        if (drawRes.state) syncState(drawRes.state);
-        setIsLoading(false);
+      const drawRes = await api.drawCard(gameCode, selfId ?? undefined);
+      if (drawRes.state) syncState(drawRes.state);
+      setIsLoading(false);
+      if (!drawRes.accepted && (drawRes.state as any)?.phase !== 'finished') {
+        // Nothing was drawn and the phase didn't move — lift the curtain,
+        // say why, and leave the draw button ready for another try.
+        setIntro(null);
+        setError(DRAW_ERRORS[drawRes.errorCode ?? ''] ?? 'Karte ziehen fehlgeschlagen. Versuche es erneut.');
       }
     } catch (err) {
       console.error('Draw failed:', err);
@@ -495,20 +539,30 @@ export default function GameScreen() {
 
   // ─── Buzzer actions ───
   const handleBuzz = useCallback(async () => {
-    if (!gameCode || !selfId) return;
+    if (!gameCode || !actorId) return;
     try {
-      const res = await api.buzz(gameCode, selfId);
+      const res = await api.buzz(gameCode, actorId);
       if (res.state) syncState(res.state);
     } catch { /* poll will catch up */ }
-  }, [gameCode, selfId, syncState]);
+  }, [gameCode, actorId, syncState]);
 
-  const handleBuzzerAnswer = useCallback(async () => {
-    if (!gameCode || !selfId || !buzzerGuess.trim()) return;
+  const handleBuzzerAnswer = useCallback(async (answer: { artist: string; title: string }) => {
+    if (!gameCode || !actorId) return;
     try {
-      const res = await api.buzzerAnswer(gameCode, selfId, buzzerGuess.trim());
+      const res = await api.buzzerAnswer(gameCode, actorId, answer);
       if (res.state) syncState(res.state);
     } catch { /* poll will catch up */ }
-  }, [gameCode, selfId, buzzerGuess, syncState]);
+  }, [gameCode, actorId, syncState]);
+
+  // ─── Snippet guess ───
+  const handleSnippetGuess = useCallback(async (guess: { artist: string; title: string; pass?: boolean }) => {
+    if (!gameCode || !actorId) return;
+    sfx.click();
+    try {
+      const res = await api.snippetGuess(gameCode, { playerId: actorId, ...guess });
+      if (res.state) syncState(res.state);
+    } catch { /* poll will catch up */ }
+  }, [gameCode, actorId, syncState]);
 
   // ─── Speak mode vote ───
   const handleSendVote = useCallback(async () => {
@@ -579,7 +633,9 @@ export default function GameScreen() {
               background: isMyTurn ? 'var(--lime)' : 'var(--gold)',
             }}
           >
-            {isMyTurn ? '▶ Du bist am Zug!' : `👀 ${currentPlayer?.avatar ?? ''} ${activePlayerName} ist am Zug`}
+            {sharedMode && CARD_PHASES.has(phase)
+              ? '🎧 Alle raten mit!'
+              : isMyTurn ? '▶ Du bist am Zug!' : `👀 ${currentPlayer?.avatar ?? ''} ${activePlayerName} ist am Zug`}
           </span>
           <span style={{ display: 'flex', gap: 6 }}>
             <button
@@ -659,78 +715,38 @@ export default function GameScreen() {
           schrumpfen — sonst drückt der Audio-Player die Spalte auf Mobile
           breiter als den Viewport. */}
       <div style={{ width: '100%', maxWidth: 720, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 14 }}>
-        {/* ─── Buzzer-Phase: Zeit abgelaufen, ein Punkt ist zu klauen ─── */}
-        {phase === 'buzzer' && roundResult && (
-          <div
-            className="slam-in panel"
-            style={{
-              padding: 22, textAlign: 'center',
-              background: 'linear-gradient(150deg, rgba(255,84,112,0.12), var(--bg-2) 60%)',
-              border: '1px solid rgba(255,84,112,0.4)',
-              display: 'grid', gap: 12,
-            }}
-          >
-            <div className="display" style={{ color: 'var(--gold)', fontSize: '0.95rem' }}>
-              ⏰ Zeit abgelaufen bei {roundResult.playerName}!
-            </div>
+        {/* ─── Buzzer-Modus: alle hören, wer zuerst buzzert, rät ─── */}
+        {phase === 'buzzer' && buzzer && currentCard && (
+          <BuzzerRound
+            card={currentCard}
+            buzzer={buzzer}
+            players={players}
+            selfId={actorId}
+            isController={isMyTurn}
+            playback={playback}
+            onTransport={
+              isMyTurn && selfId && gameCode
+                ? (playing, positionSec) =>
+                    api.sendPlayback(gameCode, { playerId: selfId, playing, positionSec }).catch(() => {})
+                : undefined
+            }
+            secondsLeft={secondsLeft}
+            onBuzz={handleBuzz}
+            onAnswer={handleBuzzerAnswer}
+          />
+        )}
 
-            {!buzzer?.winnerId ? (
-              <>
-                <div style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>
-                  Wer zuerst buzzert, darf Interpret <em className="serif-note">oder</em> Titel raten — 1 Punkt!
-                </div>
-                {secondsLeft !== null && (
-                  <div className="display" style={{ fontSize: '2rem', color: 'var(--red)', fontVariantNumeric: 'tabular-nums' }}>
-                    {secondsLeft}s
-                  </div>
-                )}
-                {selfId && selfId !== roundResult.playerId ? (
-                  <button onClick={handleBuzz} className="buzzer-button">
-                    BUZZ!
-                  </button>
-                ) : (
-                  <div style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>
-                    Die anderen können jetzt buzzern…
-                  </div>
-                )}
-              </>
-            ) : buzzer.winnerId === selfId ? (
-              <>
-                <div className="display" style={{ color: 'var(--lime)', fontSize: '0.9rem' }}>
-                  🔔 Du warst am schnellsten! Interpret ODER Titel:
-                </div>
-                {secondsLeft !== null && (
-                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--red)' }}>
-                    noch {secondsLeft}s
-                  </div>
-                )}
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input
-                    className="text-input"
-                    type="text"
-                    autoFocus
-                    placeholder="Interpret oder Titel…"
-                    value={buzzerGuess}
-                    onChange={(e) => setBuzzerGuess(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') handleBuzzerAnswer(); }}
-                  />
-                  <button
-                    onClick={handleBuzzerAnswer}
-                    disabled={!buzzerGuess.trim()}
-                    className="btn-primary"
-                    style={{ width: 'auto', padding: '10px 20px', whiteSpace: 'nowrap' }}
-                  >
-                    ✓
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div style={{ color: 'var(--gold)', fontSize: '0.9rem', fontWeight: 600 }}>
-                🔔 {buzzer.winnerName} hat gebuzzert und rät…
-                {secondsLeft !== null && <span style={{ color: 'var(--muted)' }}> ({secondsLeft}s)</span>}
-              </div>
-            )}
-          </div>
+        {/* ─── Snippet-Modus: immer längere Ausschnitte, alle raten ─── */}
+        {phase === 'snippet' && snippet && currentCard && (
+          <SnippetRound
+            key={currentCard.id}
+            card={currentCard}
+            snippet={snippet}
+            players={players}
+            selfId={actorId}
+            secondsLeft={secondsLeft}
+            onGuess={handleSnippetGuess}
+          />
         )}
 
         {/* ─── Speak-Mode: die anderen bewerten die Ansage ─── */}
@@ -802,52 +818,40 @@ export default function GameScreen() {
           >
             <div style={{ textAlign: 'center' }}>
               <div className="mono-label">
-                {roundResult.timedOut ? `⏰ Zeit abgelaufen — ${roundResult.playerName}` : `${roundResult.playerName} hat geraten`}
+                {sharedMode
+                  ? 'Deine Punkte für diesen Song'
+                  : roundResult.timedOut ? `⏰ Zeit abgelaufen — ${roundResult.playerName}` : `${roundResult.playerName} hat geraten`}
               </div>
               <div
                 className="display"
                 style={{
                   fontSize: 'clamp(2.4rem, 9vw, 3.4rem)',
                   lineHeight: 1.05,
-                  color: roundResult.points > 0 ? 'var(--lime)' : 'var(--red)',
-                  textShadow: roundResult.points > 0
+                  color: revealPoints > 0 ? 'var(--lime)' : 'var(--red)',
+                  textShadow: revealPoints > 0
                     ? '4px 4px 0 rgba(255,79,163,0.4)'
                     : '4px 4px 0 rgba(139,92,246,0.35)',
                 }}
               >
-                {roundResult.points > 0 ? `+${roundResult.points}` : '0'}
-                <span style={{ fontSize: '0.4em', marginLeft: 8, letterSpacing: '0.06em' }}>Punkte</span>
+                {revealPoints > 0 ? `+${revealPoints}` : '0'}
+                <span style={{ fontSize: '0.4em', marginLeft: 8, letterSpacing: '0.06em' }}>{revealPoints === 1 ? 'Punkt' : 'Punkte'}</span>
               </div>
             </div>
 
             <SongRevealCard song={roundResult.card} />
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <RevealCheck label="🎤 Interpret" ok={roundResult.artistCorrect} />
-              <RevealCheck label="🎶 Titel" ok={roundResult.titleCorrect} />
-              <RevealCheck label="📅 Jahr" ok={roundResult.yearExact} />
-              <RevealCheck label="📊 Timeline" ok={roundResult.timelineCorrect} />
-            </div>
-
-            {/* Buzzer-Steal-Ausgang */}
-            {roundResult.steal && (
-              <div style={{
-                padding: '10px 12px', borderRadius: 12, textAlign: 'center', fontSize: '0.85rem',
-                background: roundResult.steal.points > 0 ? 'rgba(255,214,10,0.08)' : 'rgba(255,84,112,0.06)',
-                border: roundResult.steal.points > 0 ? '1px solid rgba(255,214,10,0.3)' : '1px solid rgba(255,84,112,0.18)',
-                color: roundResult.steal.points > 0 ? 'var(--gold)' : 'var(--muted)',
-              }}>
-                {roundResult.steal.points > 0 ? (
-                  <>🔔 <strong>{roundResult.steal.playerName}</strong> hat den {roundResult.steal.field === 'artist' ? 'Interpreten' : 'Titel'} abgestaubt: +1 Punkt!</>
-                ) : roundResult.steal.guess ? (
-                  <>🔔 {roundResult.steal.playerName} hat gebuzzert, aber „{roundResult.steal.guess}" war nicht richtig.</>
-                ) : (
-                  <>🔔 {roundResult.steal.playerName} hat gebuzzert, aber nicht geantwortet.</>
-                )}
+            {sharedMode ? (
+              <SharedRevealDetails result={roundResult} selfId={actorId} />
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <RevealCheck label="🎤 Interpret" ok={roundResult.artistCorrect} />
+                <RevealCheck label="🎶 Titel" ok={roundResult.titleCorrect} />
+                <RevealCheck label="📅 Jahr" ok={roundResult.yearExact} />
+                <RevealCheck label="📊 Timeline" ok={roundResult.timelineCorrect} />
               </div>
             )}
 
-            {roundResult.playerId === selfId ? (
+            {roundResult.playerId === selfId || !selfId ? (
               <button
                 onClick={async () => {
                   sfx.click();
@@ -868,17 +872,20 @@ export default function GameScreen() {
           </div>
         )}
 
-        {/* Timeline — Zuschauer sehen die Live-Position des aktiven Spielers */}
-        <div style={isMyTurn ? undefined : { pointerEvents: 'none', opacity: 0.85 }}>
-          <Timeline
-            minYear={MIN_YEAR}
-            maxYear={MAX_YEAR}
-            value={isMyTurn ? timelineYear : (liveInput?.year || timelineYear)}
-            onChange={setTimelineYear}
-            placedCards={placedYears}
-            currentDotYear={selectedCard ? (isMyTurn ? timelineYear : (liveInput?.year || timelineYear)) : undefined}
-          />
-        </div>
+        {/* Timeline — Zuschauer sehen die Live-Position des aktiven Spielers.
+            Buzzer und Snippet kennen kein Jahr, also auch keine Timeline. */}
+        {!sharedMode && (
+          <div style={isMyTurn ? undefined : { pointerEvents: 'none', opacity: 0.85 }}>
+            <Timeline
+              minYear={MIN_YEAR}
+              maxYear={MAX_YEAR}
+              value={isMyTurn ? timelineYear : (liveInput?.year || timelineYear)}
+              onChange={setTimelineYear}
+              placedCards={placedYears}
+              currentDotYear={selectedCard ? (isMyTurn ? timelineYear : (liveInput?.year || timelineYear)) : undefined}
+            />
+          </div>
+        )}
 
         {/* Eingaben + Audio */}
         <div className="fade-up" style={{ animationDelay: '0.14s', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 }}>
@@ -969,7 +976,7 @@ export default function GameScreen() {
         )}
 
         {/* Karte-ziehen-Button (nur wenn keine Karte aktiv ist und das Spiel läuft) */}
-        {!currentCard && phase !== 'round_result' && phase !== 'buzzer' && phase !== 'reveal_vote' && phase !== 'finished' && round <= totalRounds && (isMyTurn ? (
+        {!currentCard && phase !== 'round_result' && phase !== 'buzzer' && phase !== 'snippet' && phase !== 'reveal_vote' && phase !== 'finished' && round <= totalRounds && (isMyTurn ? (
           <button
             onClick={handleDrawCard}
             disabled={isLoading}

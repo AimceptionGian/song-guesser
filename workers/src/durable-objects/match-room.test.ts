@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { MatchRoom } from './match-room';
+import { MatchRoom, SNIPPET_STAGES_SEC, SNIPPET_POINTS } from './match-room';
 import type { CommandEnvelope, MatchState } from '../types';
 import { MOCK_TRACKS } from '../db/mock-data';
 
@@ -68,10 +68,18 @@ vi.mock('../services/scoring-service', () => ({
 // deterministic and offline here. Individual tests override the behaviour.
 vi.mock('../services/preview-service', () => ({
   resolvePlayableCard: vi.fn(async (card: any) => ({ ...card, previewUrl: 'https://cdn/fresh.mp3' })),
+  PreviewUnavailableError: class PreviewUnavailableError extends Error {},
 }));
 
+// Real refill behaviour, but individually overridable
+vi.mock('../services/deck-service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/deck-service')>();
+  return { ...actual, buildRefillCards: vi.fn(actual.buildRefillCards) };
+});
+
 import { calculateFullScore } from '../services/scoring-service';
-import { resolvePlayableCard } from '../services/preview-service';
+import { resolvePlayableCard, PreviewUnavailableError } from '../services/preview-service';
+import { buildRefillCards } from '../services/deck-service';
 
 /** calculateFullScore result where the guesser missed artist + title. */
 const MISSED_ARTIST_TITLE = {
@@ -356,20 +364,6 @@ describe('MatchRoom Durable Object', () => {
       expect(data.state.deck).toHaveLength(before - 3);
     });
 
-    it('finishes the match instead of freezing when nothing playable is left', async () => {
-      await cmd(room, 'start_match', startPayload([{ id: 'p1', name: 'A', avatar: '' }]));
-      for (let i = 0; i < MOCK_TRACKS.length; i++) {
-        await cmd(room, 'draw_card');
-        await cmd(room, 'submit_guess', {
-          playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
-        });
-        await cmd(room, 'resolve_turn', { playerId: 'p1' });
-      }
-      const data = await cmd(room, 'draw_card');
-      expect(data.errorCode).toBe('DECK_EMPTY');
-      // Everyone lands on the final screen rather than on a dead draw button
-      expect(data.state.phase).toBe('finished');
-    });
   });
 
   // ─── submitGuess ───────────────────────────────────────────
@@ -569,7 +563,7 @@ describe('MatchRoom Durable Object', () => {
     it('draw sets a turn deadline when answerTimeSec > 0', async () => {
       await cmd(room, 'start_match', {
         ...startPayload(twoPlayers),
-        settings: { guessMode: 'type', answerTimeSec: 30, buzzerEnabled: false },
+        settings: { guessMode: 'type', answerTimeSec: 30 },
       });
       const data = await cmd(room, 'draw_card', { playerId: 'p1' });
       expect(data.state.turnDeadline).toBe(Date.now() + 30_000);
@@ -587,7 +581,7 @@ describe('MatchRoom Durable Object', () => {
     it('auto-submits the live input when time runs out', async () => {
       await cmd(room, 'start_match', {
         ...startPayload(twoPlayers),
-        settings: { guessMode: 'type', answerTimeSec: 30, buzzerEnabled: false },
+        settings: { guessMode: 'type', answerTimeSec: 30 },
       });
       await cmd(room, 'draw_card', { playerId: 'p1' });
 
@@ -609,7 +603,7 @@ describe('MatchRoom Durable Object', () => {
     it('does not fire before deadline + grace', async () => {
       await cmd(room, 'start_match', {
         ...startPayload(twoPlayers),
-        settings: { guessMode: 'type', answerTimeSec: 30, buzzerEnabled: false },
+        settings: { guessMode: 'type', answerTimeSec: 30 },
       });
       await cmd(room, 'draw_card', { playerId: 'p1' });
       vi.advanceTimersByTime(30_500); // inside the 1s grace window
@@ -620,7 +614,7 @@ describe('MatchRoom Durable Object', () => {
     it('a submit after the timeout is rejected as ALREADY_SUBMITTED', async () => {
       await cmd(room, 'start_match', {
         ...startPayload(twoPlayers),
-        settings: { guessMode: 'type', answerTimeSec: 30, buzzerEnabled: false },
+        settings: { guessMode: 'type', answerTimeSec: 30 },
       });
       await cmd(room, 'draw_card', { playerId: 'p1' });
       vi.advanceTimersByTime(32_000);
@@ -632,9 +626,9 @@ describe('MatchRoom Durable Object', () => {
     });
   });
 
-  // ─── buzzer ────────────────────────────────────────────────
+  // ─── buzzer mode ───────────────────────────────────────────
 
-  describe('buzzer', () => {
+  describe('buzzer mode', () => {
     const threePlayers = [
       { id: 'p1', name: 'Alice', avatar: '' },
       { id: 'p2', name: 'Bob', avatar: '' },
@@ -644,8 +638,6 @@ describe('MatchRoom Durable Object', () => {
     beforeEach(() => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date('2026-07-19T12:00:00Z'));
-      // The guesser misses artist + title so both fields are stealable
-      vi.mocked(calculateFullScore).mockReturnValue(MISSED_ARTIST_TITLE as any);
     });
 
     afterEach(() => {
@@ -657,125 +649,320 @@ describe('MatchRoom Durable Object', () => {
       return res.json();
     }
 
-    /** Start with buzzer on, draw, let the clock run out → buzzer phase. */
-    async function reachBuzzerPhase(): Promise<any> {
+    /** Start a buzzer-mode match and draw the first song. */
+    async function drawBuzzerSong(players = threePlayers): Promise<any> {
       await cmd(room, 'start_match', {
-        ...startPayload(threePlayers),
-        settings: { guessMode: 'type', answerTimeSec: 30, buzzerEnabled: true },
+        ...startPayload(players),
+        settings: { gameMode: 'buzzer' },
       });
-      await cmd(room, 'draw_card', { playerId: 'p1' });
-      vi.advanceTimersByTime(32_000);
-      return poll(room);
+      const data = await cmd(room, 'draw_card', { playerId: 'p1' });
+      return data.state;
     }
 
-    it('opens the buzzer window after a timeout when a point is stealable', async () => {
-      const state = await reachBuzzerPhase();
+    it('opens the buzzer for everyone as soon as the song is drawn', async () => {
+      const state = await drawBuzzerSong();
       expect(state.phase).toBe('buzzer');
       expect(state.buzzer.winnerId).toBeNull();
       expect(state.buzzer.openUntil).toBeGreaterThan(Date.now());
+      expect(state.buzzer.lockedOut).toEqual([]);
     });
 
-    it('goes straight to the reveal when the guesser already had artist AND title', async () => {
-      vi.mocked(calculateFullScore).mockReturnValue({
-        ...MISSED_ARTIST_TITLE, artistCorrect: true, titleCorrect: true, points: 3,
-      } as any);
-      const state = await reachBuzzerPhase();
-      expect(state.phase).toBe('round_result'); // nothing to steal
-    });
+    it('anyone may buzz — including the player who drew — and the first buzz wins', async () => {
+      await drawBuzzerSong();
 
-    it('a normal (non-timeout) submit never opens the buzzer', async () => {
-      await cmd(room, 'start_match', {
-        ...startPayload(threePlayers),
-        settings: { guessMode: 'type', answerTimeSec: 30, buzzerEnabled: true },
-      });
-      await cmd(room, 'draw_card', { playerId: 'p1' });
-      const data = await cmd(room, 'submit_guess', {
-        playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
-      });
-      expect(data.state.phase).toBe('round_result');
-    });
-
-    it('first buzz wins, the guesser cannot buzz, later buzzes are TOO_LATE', async () => {
-      await reachBuzzerPhase();
-
-      const guesser = await cmd(room, 'buzz', { playerId: 'p1' });
-      expect(guesser.accepted).toBe(false);
-      expect(guesser.errorCode).toBe('GUESSER_CANNOT_BUZZ');
-
-      const first = await cmd(room, 'buzz', { playerId: 'p2' });
+      const first = await cmd(room, 'buzz', { playerId: 'p1' });
       expect(first.accepted).toBe(true);
-      expect(first.state.buzzer.winnerId).toBe('p2');
+      expect(first.state.buzzer.winnerId).toBe('p1');
+      // The clock is frozen while they answer
+      expect(first.state.buzzer.openUntil).toBeNull();
 
-      const second = await cmd(room, 'buzz', { playerId: 'p3' });
+      const second = await cmd(room, 'buzz', { playerId: 'p2' });
       expect(second.accepted).toBe(false);
       expect(second.errorCode).toBe('TOO_LATE');
     });
 
-    it('a correct steal awards exactly 1 point to the buzzer winner', async () => {
-      const state = await reachBuzzerPhase();
-      const artist = state.lastResult.card.artist;
+    it('artist AND title right → 1 point and the reveal', async () => {
+      const state = await drawBuzzerSong();
+      const { artist, title } = state.currentCard;
 
       await cmd(room, 'buzz', { playerId: 'p2' });
-      const data = await cmd(room, 'buzzer_answer', { playerId: 'p2', text: artist });
-
-      expect(data.accepted).toBe(true);
-      expect(data.state.phase).toBe('round_result');
-      expect(data.state.lastResult.steal.field).toBe('artist');
-      expect(data.state.lastResult.steal.points).toBe(1);
-      const bob = data.state.players.find((p: any) => p.id === 'p2');
-      expect(bob.score).toBe(1);
-    });
-
-    it('a wrong steal answer awards nothing', async () => {
-      await reachBuzzerPhase();
-      await cmd(room, 'buzz', { playerId: 'p2' });
-      const data = await cmd(room, 'buzzer_answer', { playerId: 'p2', text: 'völlig falsch' });
+      const data = await cmd(room, 'buzzer_answer', { playerId: 'p2', artist, title });
 
       expect(data.state.phase).toBe('round_result');
-      expect(data.state.lastResult.steal.field).toBeNull();
-      expect(data.state.lastResult.steal.points).toBe(0);
-      const bob = data.state.players.find((p: any) => p.id === 'p2');
-      expect(bob.score).toBe(0);
+      expect(data.state.lastResult.mode).toBe('buzzer');
+      expect(data.state.lastResult.buzz.winnerId).toBe('p2');
+      expect(data.state.players.find((p: any) => p.id === 'p2').score).toBe(1);
+      // The reveal belongs to the player whose turn it is — they continue
+      expect(data.state.lastResult.playerId).toBe('p1');
     });
 
-    it('only the buzzer winner may answer', async () => {
-      await reachBuzzerPhase();
+    it('only one of the two right is a miss: no point, the buzzer reopens for the others', async () => {
+      const state = await drawBuzzerSong();
+      const { artist } = state.currentCard;
+
       await cmd(room, 'buzz', { playerId: 'p2' });
-      const data = await cmd(room, 'buzzer_answer', { playerId: 'p3', text: 'x' });
+      const data = await cmd(room, 'buzzer_answer', { playerId: 'p2', artist, title: 'falsch' });
+
+      expect(data.state.phase).toBe('buzzer');
+      expect(data.state.buzzer.winnerId).toBeNull();
+      expect(data.state.buzzer.lockedOut).toEqual(['p2']);
+      expect(data.state.buzzer.attempts[0]).toMatchObject({ artistCorrect: true, titleCorrect: false });
+      expect(data.state.players.find((p: any) => p.id === 'p2').score).toBe(0);
+
+      // Bob already missed; Cleo may still buzz and win it
+      const again = await cmd(room, 'buzz', { playerId: 'p2' });
+      expect(again.errorCode).toBe('ALREADY_MISSED');
+      await cmd(room, 'buzz', { playerId: 'p3' });
+      const win = await cmd(room, 'buzzer_answer', {
+        playerId: 'p3', artist: state.currentCard.artist, title: state.currentCard.title,
+      });
+      expect(win.state.lastResult.buzz.winnerId).toBe('p3');
+      expect(win.state.lastResult.buzz.attempts).toHaveLength(2);
+    });
+
+    it('gives the others at least a few seconds after a late miss', async () => {
+      await drawBuzzerSong();
+      vi.advanceTimersByTime(43_000); // 2s of buzz time left
+      await cmd(room, 'buzz', { playerId: 'p2' });
+      const data = await cmd(room, 'buzzer_answer', { playerId: 'p2', artist: 'x', title: 'y' });
+      expect(data.state.buzzer.openUntil).toBeGreaterThanOrEqual(Date.now() + 8_000);
+    });
+
+    it('reveals without a winner once everyone has missed', async () => {
+      await drawBuzzerSong();
+      for (const id of ['p1', 'p2', 'p3']) {
+        await cmd(room, 'buzz', { playerId: id });
+        await cmd(room, 'buzzer_answer', { playerId: id, artist: 'x', title: 'y' });
+      }
+      const state = await poll(room);
+      expect(state.phase).toBe('round_result');
+      expect(state.lastResult.buzz.winnerId).toBeNull();
+      expect(state.players.every((p: any) => p.score === 0)).toBe(true);
+    });
+
+    it('only the buzz winner may answer', async () => {
+      await drawBuzzerSong();
+      await cmd(room, 'buzz', { playerId: 'p2' });
+      const data = await cmd(room, 'buzzer_answer', { playerId: 'p3', artist: 'x', title: 'y' });
       expect(data.accepted).toBe(false);
       expect(data.errorCode).toBe('NOT_BUZZER_WINNER');
     });
 
-    it('closes with no steal when nobody buzzes in time', async () => {
-      await reachBuzzerPhase();
-      vi.advanceTimersByTime(12_000); // buzz window (10s) + grace
+    it('an unanswered buzz counts as a miss and reopens the buzzer', async () => {
+      await drawBuzzerSong();
+      await cmd(room, 'buzz', { playerId: 'p2' });
+      vi.advanceTimersByTime(22_000); // answer window (20s) + grace
       const state = await poll(room);
-      expect(state.phase).toBe('round_result');
-      expect(state.lastResult.steal).toBeNull();
+      expect(state.phase).toBe('buzzer');
+      expect(state.buzzer.lockedOut).toEqual(['p2']);
     });
 
-    it('closes with a 0-point steal when the winner never answers', async () => {
-      await reachBuzzerPhase();
-      await cmd(room, 'buzz', { playerId: 'p2' });
-      vi.advanceTimersByTime(17_000); // answer window (15s) + grace
+    it('reveals without a winner when nobody buzzes in time', async () => {
+      await drawBuzzerSong();
+      vi.advanceTimersByTime(47_000); // buzz window (45s) + grace
       const state = await poll(room);
       expect(state.phase).toBe('round_result');
-      expect(state.lastResult.steal.playerId).toBe('p2');
-      expect(state.lastResult.steal.points).toBe(0);
+      expect(state.lastResult.buzz.winnerId).toBeNull();
     });
 
-    it('a field the guesser already had cannot be stolen', async () => {
-      // Guesser got the artist — only the title is stealable
-      vi.mocked(calculateFullScore).mockReturnValue({
-        ...MISSED_ARTIST_TITLE, artistCorrect: true, points: 2,
-      } as any);
-      const state = await reachBuzzerPhase();
-      const artist = state.lastResult.card.artist;
-
+    it('the player whose turn it is continues to the next song', async () => {
+      const state = await drawBuzzerSong();
       await cmd(room, 'buzz', { playerId: 'p2' });
-      const data = await cmd(room, 'buzzer_answer', { playerId: 'p2', text: artist });
-      expect(data.state.lastResult.steal.field).toBeNull();
-      expect(data.state.lastResult.steal.points).toBe(0);
+      await cmd(room, 'buzzer_answer', {
+        playerId: 'p2', artist: state.currentCard.artist, title: state.currentCard.title,
+      });
+      const data = await cmd(room, 'resolve_turn', { playerId: 'p1' });
+      expect(data.state.phase).toBe('drawing');
+      expect(data.state.currentPlayerIndex).toBe(1);
+    });
+  });
+
+  // ─── snippet mode ──────────────────────────────────────────
+
+  describe('snippet mode', () => {
+    const twoPlayers = [
+      { id: 'p1', name: 'Alice', avatar: '' },
+      { id: 'p2', name: 'Bob', avatar: '' },
+    ];
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-19T12:00:00Z'));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function poll(r: MatchRoom): Promise<any> {
+      const res = await r.fetch(new Request('http://localhost/state'));
+      return res.json();
+    }
+
+    async function drawSnippetSong(players = twoPlayers): Promise<any> {
+      await cmd(room, 'start_match', { ...startPayload(players), settings: { gameMode: 'snippet' } });
+      const data = await cmd(room, 'draw_card', { playerId: 'p1' });
+      return data.state;
+    }
+
+    it('starts at the shortest snippet', async () => {
+      const state = await drawSnippetSong();
+      expect(state.phase).toBe('snippet');
+      expect(state.snippet.stage).toBe(0);
+      expect(state.snippet.stages).toEqual(SNIPPET_STAGES_SEC);
+    });
+
+    it('waits for every player before playing the next, longer snippet', async () => {
+      await drawSnippetSong();
+
+      const one = await cmd(room, 'snippet_guess', { playerId: 'p1', artist: 'x', title: 'y' });
+      expect(one.state.snippet.stage).toBe(0);
+      const twice = await cmd(room, 'snippet_guess', { playerId: 'p1', artist: 'x', title: 'y' });
+      expect(twice.errorCode).toBe('ALREADY_GUESSED');
+
+      const both = await cmd(room, 'snippet_guess', { playerId: 'p2', pass: true });
+      expect(both.state.snippet.stage).toBe(1);
+      expect(both.state.snippet.guessed).toEqual([]);
+    });
+
+    it('naming the song at a shorter snippet is worth more', async () => {
+      const state = await drawSnippetSong();
+      const { artist, title } = state.currentCard;
+
+      // Alice names it from the first snippet, Bob only at the third
+      await cmd(room, 'snippet_guess', { playerId: 'p1', artist, title });
+      await cmd(room, 'snippet_guess', { playerId: 'p2', artist: 'x', title: 'y' });
+      await cmd(room, 'snippet_guess', { playerId: 'p2', pass: true });
+      const data = await cmd(room, 'snippet_guess', { playerId: 'p2', artist, title });
+
+      expect(data.state.phase).toBe('round_result');
+      const alice = data.state.players.find((p: any) => p.id === 'p1');
+      const bob = data.state.players.find((p: any) => p.id === 'p2');
+      expect(alice.score).toBe(SNIPPET_POINTS[0]);
+      expect(bob.score).toBe(SNIPPET_POINTS[2]);
+      const results = data.state.lastResult.snippetResults;
+      expect(results.find((r: any) => r.playerId === 'p1').solvedAtSec).toBe(SNIPPET_STAGES_SEC[0]);
+      expect(results.find((r: any) => r.playerId === 'p2').solvedAtSec).toBe(SNIPPET_STAGES_SEC[2]);
+    });
+
+    it('a player who already named the song sits out the later stages', async () => {
+      const state = await drawSnippetSong();
+      await cmd(room, 'snippet_guess', {
+        playerId: 'p1', artist: state.currentCard.artist, title: state.currentCard.title,
+      });
+      await cmd(room, 'snippet_guess', { playerId: 'p2', pass: true });
+
+      const data = await cmd(room, 'snippet_guess', { playerId: 'p1', artist: 'x', title: 'y' });
+      expect(data.errorCode).toBe('ALREADY_SOLVED');
+      // Bob alone decides when the stage is over
+      const next = await cmd(room, 'snippet_guess', { playerId: 'p2', pass: true });
+      expect(next.state.snippet.stage).toBe(2);
+    });
+
+    it('artist and title may be found in different stages', async () => {
+      const state = await drawSnippetSong([{ id: 'p1', name: 'Alice', avatar: '' }]);
+      const { artist, title } = state.currentCard;
+
+      const first = await cmd(room, 'snippet_guess', { playerId: 'p1', artist, title: 'falsch' });
+      expect(first.state.snippet.feedback.p1).toMatchObject({ artistCorrect: true, titleCorrect: false });
+
+      // The artist stays right even when it's left blank afterwards
+      const second = await cmd(room, 'snippet_guess', { playerId: 'p1', artist: '', title });
+      expect(second.state.phase).toBe('round_result');
+      expect(second.state.players[0].score).toBe(SNIPPET_POINTS[1]);
+    });
+
+    it('ends after the longest snippet even if nobody named the song', async () => {
+      await drawSnippetSong([{ id: 'p1', name: 'Alice', avatar: '' }]);
+      let data: any;
+      for (let i = 0; i < SNIPPET_STAGES_SEC.length; i++) {
+        data = await cmd(room, 'snippet_guess', { playerId: 'p1', artist: 'x', title: 'y' });
+      }
+      expect(data.state.phase).toBe('round_result');
+      expect(data.state.lastResult.snippetResults[0]).toMatchObject({ solvedAtSec: null, points: 0 });
+    });
+
+    it('a stage closes on its deadline when someone does not guess', async () => {
+      await drawSnippetSong();
+      await cmd(room, 'snippet_guess', { playerId: 'p1', artist: 'x', title: 'y' });
+      vi.advanceTimersByTime(47_000); // stage window (45s) + grace
+      const state = await poll(room);
+      expect(state.snippet.stage).toBe(1);
+    });
+  });
+
+  // ─── robust drawing (deck refill, lookup outages) ──────────
+
+  describe('drawing when previews are hard to get', () => {
+    it('keeps the match going when the lookup service is down — the card is kept for the retry', async () => {
+      vi.mocked(resolvePlayableCard).mockRejectedValueOnce(new PreviewUnavailableError());
+      await cmd(room, 'start_match', startPayload());
+      const before = MOCK_TRACKS.length;
+
+      const failed = await cmd(room, 'draw_card');
+      expect(failed.accepted).toBe(false);
+      expect(failed.errorCode).toBe('PREVIEW_UNAVAILABLE');
+      expect(failed.state.phase).toBe('drawing');
+      expect(failed.state.deck).toHaveLength(before);
+
+      const retry = await cmd(room, 'draw_card');
+      expect(retry.accepted).toBe(true);
+      expect(retry.state.phase).toBe('guessing');
+    });
+
+    it('does not end the match after a run of unplayable songs', async () => {
+      vi.mocked(resolvePlayableCard).mockResolvedValue(null);
+      await cmd(room, 'start_match', startPayload());
+
+      const data = await cmd(room, 'draw_card');
+      expect(data.errorCode).toBe('NO_PLAYABLE_CARD');
+      expect(data.state.phase).toBe('drawing');
+      vi.mocked(resolvePlayableCard).mockImplementation(async (card: any) => ({ ...card, previewUrl: 'https://cdn/fresh.mp3' }));
+    });
+
+    it('refills a deck that ran dry instead of finishing early', async () => {
+      await room.fetch(new Request('http://localhost/init-deck', {
+        method: 'POST',
+        body: JSON.stringify({ deck: [MOCK_TRACKS[0]] }),
+      }));
+      await cmd(room, 'start_match', startPayload([{ id: 'p1', name: 'A', avatar: '' }], 3));
+
+      await cmd(room, 'draw_card');
+      await cmd(room, 'submit_guess', {
+        playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
+      });
+      await cmd(room, 'resolve_turn', { playerId: 'p1' });
+
+      const second = await cmd(room, 'draw_card');
+      expect(second.accepted).toBe(true);
+      expect(second.state.phase).toBe('guessing');
+      expect(second.state.currentCard.id).not.toBe(MOCK_TRACKS[0].id);
+    });
+
+    it('finishes only when even the refill pool is exhausted', async () => {
+      vi.mocked(buildRefillCards).mockReturnValueOnce([]);
+      await room.fetch(new Request('http://localhost/init-deck', {
+        method: 'POST',
+        body: JSON.stringify({ deck: [MOCK_TRACKS[0]] }),
+      }));
+      await cmd(room, 'start_match', startPayload([{ id: 'p1', name: 'A', avatar: '' }], 3));
+      await cmd(room, 'draw_card');
+      await cmd(room, 'submit_guess', {
+        playerId: 'p1', cardId: 'x', guessedArtist: 'A', guessedTitle: 'B', guessedYear: 2000,
+      });
+      await cmd(room, 'resolve_turn', { playerId: 'p1' });
+
+      const data = await cmd(room, 'draw_card');
+      expect(data.errorCode).toBe('DECK_EMPTY');
+      expect(data.state.phase).toBe('finished');
+    });
+
+    it('a double draw while the lookup is pending serves one card, not two', async () => {
+      await cmd(room, 'start_match', startPayload());
+      const before = MOCK_TRACKS.length;
+      const [a, b] = await Promise.all([cmd(room, 'draw_card'), cmd(room, 'draw_card')]);
+      expect(a.state.currentCard.id).toBe(b.state.currentCard.id);
+      expect(b.state.deck).toHaveLength(before - 1);
     });
   });
 
@@ -810,7 +997,7 @@ describe('MatchRoom Durable Object', () => {
     async function startSpeakAndSubmit(): Promise<any> {
       await cmd(room, 'start_match', {
         ...startPayload(threePlayers),
-        settings: { guessMode: 'speak', answerTimeSec: 0, buzzerEnabled: false },
+        settings: { guessMode: 'speak', answerTimeSec: 0 },
       });
       await cmd(room, 'draw_card', { playerId: 'p1' });
       return cmd(room, 'submit_guess', {
@@ -880,7 +1067,7 @@ describe('MatchRoom Durable Object', () => {
       await cmd(room, 'start_match', {
         players: [{ id: 'p1', name: 'Alice', avatar: '' }],
         totalRounds: 3,
-        settings: { guessMode: 'speak', answerTimeSec: 0, buzzerEnabled: false },
+        settings: { guessMode: 'speak', answerTimeSec: 0 },
       });
       await cmd(room, 'draw_card', { playerId: 'p1' });
       const data = await cmd(room, 'submit_guess', {
@@ -892,7 +1079,7 @@ describe('MatchRoom Durable Object', () => {
     it('speak-mode timeout goes to the vote, not the buzzer', async () => {
       await cmd(room, 'start_match', {
         ...startPayload(threePlayers),
-        settings: { guessMode: 'speak', answerTimeSec: 30, buzzerEnabled: false },
+        settings: { guessMode: 'speak', answerTimeSec: 30 },
       });
       await cmd(room, 'draw_card', { playerId: 'p1' });
       vi.advanceTimersByTime(32_000);

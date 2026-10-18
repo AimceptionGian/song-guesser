@@ -10,6 +10,12 @@ interface AudioPlayerProps {
   remotePlayback?: { playing: boolean; positionSec: number; updatedAt: number } | null;
   /** Called when the controlling player plays/pauses/seeks. */
   onTransport?: (playing: boolean, positionSec: number) => void;
+  /**
+   * Pause on every device while true (buzzer mode: someone buzzed and is
+   * answering). When it clears, playback resumes where it was if it had
+   * been playing — for spectators by following the remote state again.
+   */
+  hold?: boolean;
 }
 
 /**
@@ -93,6 +99,7 @@ export default function AudioPlayer({
   isController = true,
   remotePlayback = null,
   onTransport,
+  hold = false,
 }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -180,7 +187,7 @@ export default function AudioPlayer({
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || hold) return;
 
     // Spectators can't control the transport — a tap only unlocks audio
     // when the browser blocked autoplay.
@@ -206,11 +213,34 @@ export default function AudioPlayer({
         })
         .catch(() => setHasError(true));
     }
-  }, [isPlaying, isController, needsGesture, remotePlayback, onTransport]);
+  }, [isPlaying, isController, needsGesture, remotePlayback, onTransport, hold]);
+
+  // ─── Hold: pause everywhere while someone answers a buzz ───
+  const resumeAfterHoldRef = useRef(false);
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (hold) {
+      resumeAfterHoldRef.current = !audio.paused;
+      audio.pause();
+      setIsPlaying(false);
+      // Tell the spectators too, so they don't jump ahead on resume
+      if (isController && resumeAfterHoldRef.current) onTransport?.(false, audio.currentTime);
+    } else if (isController && resumeAfterHoldRef.current) {
+      resumeAfterHoldRef.current = false;
+      audio.play()
+        .then(() => {
+          setIsPlaying(true);
+          onTransport?.(true, audio.currentTime);
+        })
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hold]);
 
   // ─── Spectator: follow the remote playback state ───
   useEffect(() => {
-    if (isController || !remotePlayback) return;
+    if (isController || !remotePlayback || hold) return;
     const audio = audioRef.current;
     if (!audio) return;
 
@@ -228,7 +258,7 @@ export default function AudioPlayer({
       setIsPlaying(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isController, remotePlayback?.playing, remotePlayback?.positionSec, remotePlayback?.updatedAt, effectiveUrl]);
+  }, [isController, remotePlayback?.playing, remotePlayback?.positionSec, remotePlayback?.updatedAt, effectiveUrl, hold]);
 
   const formatTime = (seconds: number): string => {
     const m = Math.floor(seconds / 60);

@@ -18,14 +18,16 @@ import {
   getCategoryAvailability,
 } from '../services/category-service';
 import { DurableObjectHistoryStore } from '../db/repositories/durable-object-repository';
-import { SpotifyHistoryProvider } from '../adapters/spotify-history-provider';
+import { SpotifyHistoryProvider, MAX_HISTORY_TRACKS } from '../adapters/spotify-history-provider';
 import { catalogService } from '../services/catalog-service';
 import { createSession, extractTokenFromRequest, validateSession } from '../services/auth-service';
 import { historyService } from '../services/history-service';
 import { buildDeck } from '../services/deck-service';
 import type { HistoryTrack } from '../adapters/history-provider';
-import type { CreateLobbyRequest, JoinLobbyRequest, LobbySettings } from '../types';
+import type { CreateLobbyRequest, JoinLobbyRequest, LobbySettings, GameMode } from '../types';
 import type { Env } from '../env';
+
+const GAME_MODES: GameMode[] = ['timeline', 'buzzer', 'snippet'];
 
 const api = new Hono<{ Bindings: Env }>();
 
@@ -84,15 +86,15 @@ api.get('/lobbies/:code', async (c) => {
 
 /**
  * Host updates lobby settings before the match starts.
- * Adjustable: totalRounds, guessMode, answerTimeSec, buzzerEnabled.
+ * Adjustable: totalRounds, gameMode, guessMode, answerTimeSec.
  */
 api.post('/lobbies/:code/settings', async (c) => {
   const code = c.req.param('code');
   const body = await c.req.json<{
     totalRounds?: number;
+    gameMode?: string;
     guessMode?: string;
     answerTimeSec?: number;
-    buzzerEnabled?: boolean;
   }>();
   const lobby = await getLobbyByCode(code);
 
@@ -123,8 +125,11 @@ api.post('/lobbies/:code/settings', async (c) => {
     patch.answerTimeSec = secs;
   }
 
-  if (body.buzzerEnabled !== undefined) {
-    patch.buzzerEnabled = !!body.buzzerEnabled;
+  if (body.gameMode !== undefined) {
+    if (!GAME_MODES.includes(body.gameMode as GameMode)) {
+      return c.json({ error: `gameMode must be one of ${GAME_MODES.join(', ')}` }, 400);
+    }
+    patch.gameMode = body.gameMode as GameMode;
   }
 
   if (Object.keys(patch).length === 0) {
@@ -189,7 +194,12 @@ api.post('/lobbies/:code/start', async (c) => {
 
   await setLobbyState(lobby.id, 'starting');
 
-  const deck = await buildDeck(c.env, lobby);
+  // Never let a deck-build hiccup block the start: without a seeded deck the
+  // game start below builds one again.
+  const deck = await buildDeck(c.env, lobby).catch((err) => {
+    console.error('[lobbies/start] deck build failed:', err);
+    return undefined;
+  });
 
   // Pre-seed the Durable Object with the deck
   const doId = c.env.MATCH_ROOM.idFromName(lobby.id);
@@ -279,19 +289,16 @@ api.post('/games/:code/start', async (c) => {
     await sendToDO(c.env, lobby.id, 'init-deck', { deck });
   }
 
-  // Start match. The buzzer only makes sense when a time limit exists and
-  // answers are typed (auto-graded) — enforced here in one place.
-  const guessMode = lobby.settings.guessMode ?? 'type';
-  const answerTimeSec = lobby.settings.answerTimeSec ?? 0;
   const res = await sendToDO(c.env, lobby.id, 'command', {
     type: 'start_match',
     payload: {
       players: lobby.players.map((p) => ({ id: p.id, name: p.name, avatar: p.avatar })),
       totalRounds: lobby.settings.totalRounds,
       settings: {
-        guessMode,
-        answerTimeSec,
-        buzzerEnabled: !!lobby.settings.buzzerEnabled && answerTimeSec > 0 && guessMode === 'type',
+        // Lobbies created before game modes existed have no gameMode
+        gameMode: lobby.settings.gameMode ?? 'timeline',
+        guessMode: lobby.settings.guessMode ?? 'type',
+        answerTimeSec: lobby.settings.answerTimeSec ?? 0,
       },
     },
   });
@@ -373,8 +380,8 @@ api.post('/games/:code/guess', async (c) => {
 });
 
 /**
- * Buzzer: after the active player's time ran out, another player buzzes
- * to try to steal a point. First buzz wins the answer window.
+ * Buzzer mode: a player buzzes to answer the current song. The first buzz
+ * wins the answer window; players who already missed this song can't buzz.
  */
 api.post('/games/:code/buzz', async (c) => {
   const code = c.req.param('code');
@@ -390,16 +397,33 @@ api.post('/games/:code/buzz', async (c) => {
   return c.json(result);
 });
 
-/** Buzzer winner submits one guess, matched against artist OR title. */
+/** Buzz winner answers — artist AND title must both be right for the point. */
 api.post('/games/:code/buzzer-answer', async (c) => {
   const code = c.req.param('code');
   const lobby = await getLobbyByCode(code);
   if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
 
-  const body = await c.req.json<{ playerId?: string; text?: string }>().catch(() => ({} as Record<string, never>));
+  const body = await c.req.json<{ playerId?: string; artist?: string; title?: string }>()
+    .catch(() => ({} as Record<string, never>));
   const res = await sendToDO(c.env, lobby.id, 'command', {
     type: 'buzzer_answer',
-    payload: { playerId: body.playerId, text: body.text ?? '' },
+    payload: { playerId: body.playerId, artist: body.artist ?? '', title: body.title ?? '' },
+  });
+  const result = await res.json();
+  return c.json(result);
+});
+
+/** Snippet mode: a player's guess for the current stage (or a pass). */
+api.post('/games/:code/snippet-guess', async (c) => {
+  const code = c.req.param('code');
+  const lobby = await getLobbyByCode(code);
+  if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
+
+  const body = await c.req.json<{ playerId?: string; artist?: string; title?: string; pass?: boolean }>()
+    .catch(() => ({} as Record<string, never>));
+  const res = await sendToDO(c.env, lobby.id, 'command', {
+    type: 'snippet_guess',
+    payload: { playerId: body.playerId, artist: body.artist ?? '', title: body.title ?? '', pass: !!body.pass },
   });
   const result = await res.json();
   return c.json(result);
@@ -510,8 +534,10 @@ api.post('/history/import-cached', async (c) => {
   const lobby = await getLobbyByCode(lobbyCode);
   if (!lobby) return c.json({ error: 'Lobby not found' }, 404);
 
-  await new DurableObjectHistoryStore(c.env).saveHistory(lobby.id, playerId, tracks);
-  return c.json({ success: true, tracks: tracks.length });
+  // Client-supplied, so bounded the same way a fresh sync is (one DO value)
+  const capped = tracks.slice(0, MAX_HISTORY_TRACKS);
+  await new DurableObjectHistoryStore(c.env).saveHistory(lobby.id, playerId, capped);
+  return c.json({ success: true, tracks: capped.length });
 });
 
 /**

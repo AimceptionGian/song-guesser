@@ -8,9 +8,9 @@ const defaultSettings: LobbySettings = {
   maxPoints: 1000,
   timelineOnlyScoring: false,
   yearRange: { min: 1960, max: 2024 },
+  gameMode: 'timeline',
   guessMode: 'type',
   answerTimeSec: 0,
-  buzzerEnabled: false,
 };
 
 // Repository instance (swappable for testing / MongoDB)

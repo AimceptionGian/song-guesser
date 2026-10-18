@@ -1,8 +1,12 @@
 import { DurableObject } from 'cloudflare:workers';
-import type { MatchState, MatchPlayer, MatchSettings, Card, CommandEnvelope, ResponseEnvelope, CommandType, LiveInput, PlaybackState } from '../types';
+import type {
+  MatchState, MatchPlayer, MatchSettings, Card, CommandEnvelope, ResponseEnvelope, CommandType,
+  LiveInput, PlaybackState, GameMode, BuzzAttempt, SnippetPlayerResult,
+} from '../types';
 import { MOCK_TRACKS, shuffleArray } from '../db/mock-data';
 import { calculateFullScore, isCloseMatch, isArtistMatch } from '../services/scoring-service';
-import { resolvePlayableCard } from '../services/preview-service';
+import { resolvePlayableCard, PreviewUnavailableError } from '../services/preview-service';
+import { buildRefillCards, cardKey } from '../services/deck-service';
 import type { GuessSubmission } from '../types';
 import type { Env } from '../env';
 
@@ -10,19 +14,35 @@ import type { Env } from '../env';
 // polls) first runs checkTimeouts(), so an expired deadline is applied within
 // one poll interval — no DO alarms needed.
 const TIMEOUT_GRACE_MS = 1000;   // latency headroom before a deadline fires
-const BUZZ_WINDOW_MS = 10_000;   // how long players may buzz after the timeout
-const BUZZ_ANSWER_MS = 15_000;   // how long the buzzer winner may answer
 const VOTE_WINDOW_MS = 45_000;   // how long the reveal vote stays open
 const FALLBACK_GUESS_YEAR = 1992; // matches the frontend's initial slider position
-// How many cards a single draw may burn looking for a playable preview.
-// Each attempt is one lookup, so this also bounds the draw's latency.
-const MAX_DRAW_ATTEMPTS = 4;
+// How many unplayable cards a single draw may skip looking for a playable
+// preview. Each attempt is one lookup, so this also bounds the draw's latency.
+const MAX_DRAW_ATTEMPTS = 6;
+// Cards added when the deck runs dry mid-match (see refillDeck).
+const REFILL_SIZE = 20;
+
+// Buzzer mode
+const BUZZ_ROUND_MS = 45_000;      // how long a song stays open for buzzing (preview is 30s)
+const BUZZ_ANSWER_MS = 20_000;     // how long the buzz winner may answer
+const BUZZ_REOPEN_MIN_MS = 8_000;  // after a miss, the others get at least this long
+
+// Snippet mode: snippet length per stage and the points for naming the
+// song at that stage. The shorter the snippet, the more it's worth.
+export const SNIPPET_STAGES_SEC = [0.1, 0.5, 2, 8, 15];
+export const SNIPPET_POINTS = [5, 4, 3, 2, 1];
+const SNIPPET_STAGE_MS = 45_000;   // a stage closes after this even if someone hasn't guessed
+
+const GAME_MODES: GameMode[] = ['timeline', 'buzzer', 'snippet'];
 
 const DEFAULT_MATCH_SETTINGS: MatchSettings = {
+  gameMode: 'timeline',
   guessMode: 'type',
   answerTimeSec: 0,
-  buzzerEnabled: false,
 };
+
+const reject = (version: number, errorCode: string): ResponseEnvelope =>
+  ({ accepted: false, newVersion: version, stateDelta: {}, errorCode });
 
 // WebSocket client metadata
 interface WSClient {
@@ -45,6 +65,9 @@ export class MatchRoom extends DurableObject {
   private liveInput: LiveInput | null = null;
   // Transient: the active player's audio playback state (not persisted)
   private playback: PlaybackState | null = null;
+  // A draw awaits preview lookups, and a DO keeps serving requests while an
+  // outgoing fetch is pending — a double click would otherwise pop two cards.
+  private drawing: Promise<ResponseEnvelope> | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -243,6 +266,8 @@ export class MatchRoom extends DurableObject {
         return this.buzz(command);
       case 'buzzer_answer':
         return this.buzzerAnswer(command);
+      case 'snippet_guess':
+        return this.snippetGuess(command);
       case 'vote_reveal':
         return this.voteReveal(command);
       case 'end_match':
@@ -270,7 +295,13 @@ export class MatchRoom extends DurableObject {
     const players = command.payload.players as Array<{ id: string; name: string; avatar: string }>;
     const totalRounds = command.payload.totalRounds as number || 5;
     const rawSettings = (command.payload.settings ?? {}) as Partial<MatchSettings>;
-    const settings: MatchSettings = { ...DEFAULT_MATCH_SETTINGS, ...rawSettings };
+    const settings: MatchSettings = {
+      gameMode: GAME_MODES.includes(rawSettings.gameMode as GameMode)
+        ? (rawSettings.gameMode as GameMode)
+        : DEFAULT_MATCH_SETTINGS.gameMode,
+      guessMode: rawSettings.guessMode === 'speak' ? 'speak' : 'type',
+      answerTimeSec: Number(rawSettings.answerTimeSec) || 0,
+    };
 
     if (!players || players.length === 0) {
       return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NO_PLAYERS' };
@@ -305,7 +336,9 @@ export class MatchRoom extends DurableObject {
       settings,
       turnDeadline: null,
       buzzer: null,
+      snippet: null,
       voting: null,
+      drawnKeys: [],
     };
     this.persistState();
 
@@ -316,48 +349,75 @@ export class MatchRoom extends DurableObject {
     };
   }
 
-  private async drawCard(command: CommandEnvelope): Promise<ResponseEnvelope> {
-    if (!this.state) {
-      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NO_MATCH' };
-    }
+  private gameMode(): GameMode {
+    return this.state?.settings?.gameMode ?? 'timeline';
+  }
 
-    if (!this.isCurrentPlayer(command.payload.playerId)) {
-      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NOT_YOUR_TURN' };
-    }
+  private drawCard(command: CommandEnvelope): Promise<ResponseEnvelope> {
+    if (this.drawing) return this.drawing;
+    this.drawing = this.doDrawCard(command).finally(() => { this.drawing = null; });
+    return this.drawing;
+  }
+
+  private async doDrawCard(command: CommandEnvelope): Promise<ResponseEnvelope> {
+    if (!this.state) return reject(this.version, 'NO_MATCH');
+
+    if (!this.isCurrentPlayer(command.payload.playerId)) return reject(this.version, 'NOT_YOUR_TURN');
 
     // The pending reveal must be resolved before the next card
-    if (this.state.phase === 'round_result') {
-      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'RESOLVE_FIRST' };
-    }
+    if (this.state.phase === 'round_result') return reject(this.version, 'RESOLVE_FIRST');
 
     // Idempotent while a card is already active: a second draw (double-click,
     // re-render) must not burn another card from the deck.
-    if (this.state.phase === 'guessing' && this.state.currentCard) {
+    if (this.state.phase !== 'drawing' && this.state.currentCard) {
       return {
         accepted: true,
         newVersion: this.version,
-        stateDelta: { phase: 'guessing', currentCard: this.state.currentCard },
+        stateDelta: { phase: this.state.phase, currentCard: this.state.currentCard },
       };
     }
+    if (this.state.phase !== 'drawing') return reject(this.version, 'NOT_DRAWING');
 
     // Preview URLs expire (Deezer signs them for 15 minutes), so they are
-    // resolved now rather than at deck-build time. A card we can't get audio
-    // for is silently discarded and the next one is drawn — the players never
-    // see a dead card, only the draw taking a moment longer.
+    // resolved now rather than at deck-build time. A card without audio is
+    // discarded and the next one is drawn — the players never see a dead
+    // card, only the draw taking a moment longer.
+    //
+    // Two failure modes are kept strictly apart, because conflating them is
+    // what used to end matches early or stop them from starting:
+    // - "this song has no preview" → skip the card, try the next one
+    // - "the lookup service is unavailable" (rate limit, outage) → the card
+    //   is fine; put it back and let the player retry. Never end the match.
     let card: Card | null = null;
+    let lookupUnavailable = false;
     for (let attempt = 0; attempt < MAX_DRAW_ATTEMPTS; attempt++) {
+      if (this.state.deck.length === 0) this.refillDeck();
       const candidate = this.state.deck.pop();
       if (!candidate) break;
 
-      card = await resolvePlayableCard(candidate);
+      try {
+        card = await resolvePlayableCard(candidate);
+      } catch (err) {
+        if (!(err instanceof PreviewUnavailableError)) console.error('[MatchRoom] preview lookup failed:', err);
+        this.state.deck.push(candidate);
+        lookupUnavailable = true;
+        break;
+      }
+      this.markDrawn(candidate);
       if (card) break;
 
       console.warn(`[MatchRoom] no playable preview for "${candidate.artist} – ${candidate.title}", skipping`);
     }
 
     if (!card) {
-      // Nothing playable left. Ending the match beats freezing on a draw
-      // button that can never succeed — everyone lands on the final screen.
+      if (lookupUnavailable || this.state.deck.length > 0) {
+        // Recoverable: the phase stays 'drawing' and the player can draw again.
+        this.state.version = ++this.version;
+        this.persistState();
+        return reject(this.version, lookupUnavailable ? 'PREVIEW_UNAVAILABLE' : 'NO_PLAYABLE_CARD');
+      }
+      // Deck and refill pool both exhausted — only reachable after hundreds
+      // of songs. Ending the match beats freezing on a draw that can't work.
       console.warn('[MatchRoom] deck exhausted — finishing match early');
       this.state.phase = 'finished';
       this.state.currentCard = null;
@@ -366,21 +426,81 @@ export class MatchRoom extends DurableObject {
       return { accepted: false, newVersion: this.version, stateDelta: { phase: 'finished' }, errorCode: 'DECK_EMPTY' };
     }
 
-    this.state.currentCard = card;
-    this.state.phase = 'guessing';
-    // Answer timer starts the moment the card is drawn
-    const answerTimeSec = this.state.settings?.answerTimeSec ?? 0;
-    this.state.turnDeadline = answerTimeSec > 0 ? Date.now() + answerTimeSec * 1000 : null;
-    this.state.version = ++this.version;
-    this.liveInput = null;
-    this.playback = null;
-    this.persistState();
+    this.startRound(card);
 
     return {
       accepted: true,
       newVersion: this.version,
-      stateDelta: { phase: 'guessing', currentCard: card },
+      stateDelta: { phase: this.state.phase, currentCard: card },
     };
+  }
+
+  /** Remember a dealt card so a refill can't bring it back. */
+  private markDrawn(card: Card): void {
+    if (!this.state) return;
+    this.state.drawnKeys = [...(this.state.drawnKeys ?? []), cardKey(card)];
+  }
+
+  /**
+   * The deck ran dry before the match is over — a small history pool, or a
+   * run of songs without previews. Top it up with curated classics that
+   * haven't come up yet instead of ending the match.
+   */
+  private refillDeck(): void {
+    if (!this.state) return;
+    const exclude = new Set(this.state.drawnKeys ?? []);
+    if (this.state.currentCard) exclude.add(cardKey(this.state.currentCard));
+    const refill = buildRefillCards(REFILL_SIZE, exclude);
+    if (refill.length) console.warn(`[MatchRoom] deck ran dry — refilled with ${refill.length} curated cards`);
+    this.state.deck.push(...refill);
+  }
+
+  /** A playable card was drawn: open the round the game mode calls for. */
+  private startRound(card: Card): void {
+    if (!this.state) return;
+    const now = Date.now();
+    this.state.currentCard = card;
+    this.state.lastResult = null;
+    this.state.turnDeadline = null;
+    this.state.buzzer = null;
+    this.state.snippet = null;
+
+    switch (this.gameMode()) {
+      case 'buzzer':
+        this.state.phase = 'buzzer';
+        this.state.buzzer = {
+          openUntil: now + BUZZ_ROUND_MS,
+          remainingMs: BUZZ_ROUND_MS,
+          winnerId: null,
+          winnerName: null,
+          answerDeadline: null,
+          lockedOut: [],
+          attempts: [],
+        };
+        break;
+      case 'snippet':
+        this.state.phase = 'snippet';
+        this.state.snippet = {
+          stage: 0,
+          stages: SNIPPET_STAGES_SEC,
+          deadline: now + SNIPPET_STAGE_MS,
+          guessed: [],
+          solved: {},
+          feedback: {},
+        };
+        break;
+      default: {
+        this.state.phase = 'guessing';
+        // Answer timer starts the moment the card is drawn
+        const answerTimeSec = this.state.settings?.answerTimeSec ?? 0;
+        this.state.turnDeadline = answerTimeSec > 0 ? now + answerTimeSec * 1000 : null;
+      }
+    }
+
+    this.state.version = ++this.version;
+    this.liveInput = null;
+    this.playback = null;
+    this.persistState();
   }
 
   private submitGuess(command: CommandEnvelope): ResponseEnvelope {
@@ -477,7 +597,7 @@ export class MatchRoom extends DurableObject {
       yearDiff: result.yearDiff,
       points,
       timedOut,
-      steal: null,
+      mode: 'timeline',
     };
 
     const others = this.state.players.filter((p) => p.id !== submission.playerId);
@@ -489,20 +609,6 @@ export class MatchRoom extends DurableObject {
         deadline: Date.now() + VOTE_WINDOW_MS,
         voterIds: others.map((p) => p.id),
         votes: {},
-      };
-    } else if (
-      timedOut &&
-      this.state.settings?.buzzerEnabled &&
-      others.length > 0 &&
-      (!this.state.lastResult.artistCorrect || !this.state.lastResult.titleCorrect)
-    ) {
-      // Time ran out and a point is still stealable — open the buzzer window
-      this.state.phase = 'buzzer';
-      this.state.buzzer = {
-        openUntil: Date.now() + BUZZ_WINDOW_MS,
-        winnerId: null,
-        winnerName: null,
-        answerDeadline: null,
       };
     } else {
       // Pause on the reveal: everyone sees the result until the guesser
@@ -542,24 +648,30 @@ export class MatchRoom extends DurableObject {
       return;
     }
 
-    // Buzzer window closed without a buzz → show the reveal
     if (this.state.phase === 'buzzer' && this.state.buzzer) {
       const b = this.state.buzzer;
-      if (!b.winnerId && now > b.openUntil + TIMEOUT_GRACE_MS) {
-        this.finishBuzzer(null);
+      // Nobody named the song in time → reveal
+      if (!b.winnerId && b.openUntil && now > b.openUntil + TIMEOUT_GRACE_MS) {
+        this.finishBuzzerRound(null);
         return;
       }
-      // Winner never answered → no steal
+      // Buzz winner never answered → counts as a miss, the others may buzz
       if (b.winnerId && b.answerDeadline && now > b.answerDeadline + TIMEOUT_GRACE_MS) {
-        this.finishBuzzer({
-          playerId: b.winnerId,
-          playerName: b.winnerName ?? '',
-          guess: '',
-          field: null,
-          points: 0,
-        });
+        this.resolveBuzzAttempt(b.winnerId, '', '');
         return;
       }
+    }
+
+    // Snippet stage closed → whoever hasn't guessed just doesn't score here
+    if (
+      this.state.phase === 'snippet' &&
+      this.state.snippet &&
+      now > this.state.snippet.deadline + TIMEOUT_GRACE_MS
+    ) {
+      this.advanceSnippetStage();
+      this.state.version = ++this.version;
+      this.persistState();
+      return;
     }
 
     // Vote window closed → tally whatever votes came in
@@ -574,27 +686,32 @@ export class MatchRoom extends DurableObject {
 
   // ─── Buzzer ───
 
+  // Buzzer mode: the song plays for everyone, anyone may buzz. The first
+  // buzz freezes the clock and gives that player the answer; artist AND
+  // title must both be right for the point. A miss locks that player out
+  // for this song and hands the buzzer back to the others.
+
   private buzz(command: CommandEnvelope): ResponseEnvelope {
     if (!this.state || this.state.phase !== 'buzzer' || !this.state.buzzer) {
-      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NO_BUZZER_PHASE' };
+      return reject(this.version, 'NO_BUZZER_PHASE');
     }
     const playerId = command.payload.playerId as string | undefined;
     const player = this.state.players.find((p) => p.id === playerId);
-    if (!playerId || !player) {
-      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'PLAYER_NOT_FOUND' };
-    }
-    if (playerId === this.state.lastResult?.playerId) {
-      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'GUESSER_CANNOT_BUZZ' };
-    }
-    if (this.state.buzzer.winnerId) {
-      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'TOO_LATE' };
-    }
+    if (!playerId || !player) return reject(this.version, 'PLAYER_NOT_FOUND');
 
+    const b = this.state.buzzer;
+    if (b.winnerId) return reject(this.version, 'TOO_LATE');
+    if (b.lockedOut.includes(playerId)) return reject(this.version, 'ALREADY_MISSED');
+
+    const now = Date.now();
     this.state.buzzer = {
-      ...this.state.buzzer,
+      ...b,
       winnerId: playerId,
       winnerName: player.name,
-      answerDeadline: Date.now() + BUZZ_ANSWER_MS,
+      // Freeze the clock while they answer; it resumes after a miss
+      remainingMs: Math.max(0, (b.openUntil ?? now) - now),
+      openUntil: null,
+      answerDeadline: now + BUZZ_ANSWER_MS,
     };
     this.state.version = ++this.version;
     this.persistState();
@@ -604,58 +721,235 @@ export class MatchRoom extends DurableObject {
 
   private buzzerAnswer(command: CommandEnvelope): ResponseEnvelope {
     if (!this.state || this.state.phase !== 'buzzer' || !this.state.buzzer?.winnerId) {
-      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NO_BUZZER_PHASE' };
+      return reject(this.version, 'NO_BUZZER_PHASE');
     }
     const playerId = command.payload.playerId as string | undefined;
-    if (playerId !== this.state.buzzer.winnerId) {
-      return { accepted: false, newVersion: this.version, stateDelta: {}, errorCode: 'NOT_BUZZER_WINNER' };
+    if (!playerId || playerId !== this.state.buzzer.winnerId) {
+      return reject(this.version, 'NOT_BUZZER_WINNER');
     }
 
-    const text = String(command.payload.text ?? '').trim();
-    const card = this.state.lastResult?.card;
-    const lr = this.state.lastResult;
-
-    // One guess, matched against whichever field is still stealable.
-    // Fields the active player already got right cannot be stolen.
-    let field: 'artist' | 'title' | null = null;
-    if (card && lr && text) {
-      if (!lr.artistCorrect && isArtistMatch(text, card.artist)) field = 'artist';
-      else if (!lr.titleCorrect && isCloseMatch(text, card.title)) field = 'title';
-    }
-
-    const winnerIdx = this.state.players.findIndex((p) => p.id === playerId);
-    if (field && winnerIdx !== -1) {
-      this.state.players[winnerIdx] = {
-        ...this.state.players[winnerIdx],
-        score: this.state.players[winnerIdx].score + 1,
-      };
-    }
-
-    this.finishBuzzer({
+    this.resolveBuzzAttempt(
       playerId,
-      playerName: this.state.buzzer.winnerName ?? '',
-      guess: text,
-      field,
-      points: field ? 1 : 0,
-    });
+      String(command.payload.artist ?? '').trim(),
+      String(command.payload.title ?? '').trim(),
+    );
 
     return {
       accepted: true,
       newVersion: this.version,
-      stateDelta: { phase: this.state.phase, players: this.state.players, lastResult: this.state.lastResult },
+      stateDelta: {
+        phase: this.state.phase,
+        players: this.state.players,
+        buzzer: this.state.buzzer,
+        lastResult: this.state.lastResult,
+      },
     };
   }
 
-  /** Close the buzzer phase and show the reveal (steal may be null). */
-  private finishBuzzer(steal: NonNullable<MatchState['lastResult']>['steal']): void {
-    if (!this.state) return;
-    if (this.state.lastResult) {
-      this.state.lastResult = { ...this.state.lastResult, steal: steal ?? null };
+  /** Grade the buzz winner's answer: a hit ends the song, a miss reopens the buzzer. */
+  private resolveBuzzAttempt(playerId: string, artist: string, title: string): void {
+    if (!this.state?.buzzer || !this.state.currentCard) return;
+    const card = this.state.currentCard;
+    const b = this.state.buzzer;
+
+    const attempt: BuzzAttempt = {
+      playerId,
+      playerName: b.winnerName ?? '',
+      artist,
+      title,
+      artistCorrect: !!artist && isArtistMatch(artist, card.artist),
+      titleCorrect: !!title && isCloseMatch(title, card.title),
+    };
+    const attempts = [...b.attempts, attempt];
+
+    if (attempt.artistCorrect && attempt.titleCorrect) {
+      const idx = this.state.players.findIndex((p) => p.id === playerId);
+      if (idx !== -1) {
+        const p = this.state.players[idx];
+        this.state.players[idx] = { ...p, score: p.score + 1, hand: [...p.hand, card] };
+      }
+      this.state.buzzer = { ...b, attempts };
+      this.finishBuzzerRound(playerId);
+      return;
     }
+
+    const lockedOut = [...b.lockedOut, playerId];
+    if (this.state.players.every((p) => lockedOut.includes(p.id))) {
+      // Everyone has had their go
+      this.state.buzzer = { ...b, attempts, lockedOut };
+      this.finishBuzzerRound(null);
+      return;
+    }
+
+    this.state.buzzer = {
+      ...b,
+      attempts,
+      lockedOut,
+      winnerId: null,
+      winnerName: null,
+      answerDeadline: null,
+      openUntil: Date.now() + Math.max(b.remainingMs, BUZZ_REOPEN_MIN_MS),
+    };
+    this.state.version = ++this.version;
+    this.persistState();
+  }
+
+  /** Close the song in buzzer mode and show the reveal. */
+  private finishBuzzerRound(winnerId: string | null): void {
+    if (!this.state?.currentCard) return;
+    const winner = winnerId ? this.state.players.find((p) => p.id === winnerId) : undefined;
+    this.state.lastResult = {
+      ...this.sharedRevealBase(this.state.currentCard),
+      mode: 'buzzer',
+      artistCorrect: !!winner,
+      titleCorrect: !!winner,
+      points: winner ? 1 : 0,
+      buzz: {
+        winnerId: winner?.id ?? null,
+        winnerName: winner?.name ?? null,
+        attempts: this.state.buzzer?.attempts ?? [],
+      },
+    };
     this.state.phase = 'round_result';
     this.state.buzzer = null;
     this.state.version = ++this.version;
     this.persistState();
+  }
+
+  /**
+   * Reveal skeleton for the modes everyone plays at once. It is owned by
+   * the player whose turn it is (they drew the card and continue the game);
+   * the timeline-only fields stay neutral.
+   */
+  private sharedRevealBase(card: Card): NonNullable<MatchState['lastResult']> {
+    const drawerId = this.state!.turnOrder[this.state!.currentPlayerIndex];
+    const drawer = this.state!.players.find((p) => p.id === drawerId);
+    return {
+      playerId: drawerId,
+      playerName: drawer?.name ?? '',
+      card,
+      guessedArtist: '',
+      guessedTitle: '',
+      guessedYear: card.year,
+      artistCorrect: false,
+      titleCorrect: false,
+      yearExact: false,
+      timelineCorrect: false,
+      yearDiff: 0,
+      points: 0,
+    };
+  }
+
+  // ─── Snippet mode ───
+  // Everyone hears the same snippet (played locally on each device) and
+  // guesses once per stage. Artist and title can be found in different
+  // stages — what a player got right stays right — and the song counts as
+  // named once both are. The stage advances when every player still in the
+  // race has guessed (or passed), or when the stage deadline runs out.
+
+  private snippetGuess(command: CommandEnvelope): ResponseEnvelope {
+    if (!this.state || this.state.phase !== 'snippet' || !this.state.snippet || !this.state.currentCard) {
+      return reject(this.version, 'NO_SNIPPET_PHASE');
+    }
+    const playerId = command.payload.playerId as string | undefined;
+    const player = this.state.players.find((p) => p.id === playerId);
+    if (!playerId || !player) return reject(this.version, 'PLAYER_NOT_FOUND');
+
+    const s = this.state.snippet;
+    if (s.solved[playerId]) return reject(this.version, 'ALREADY_SOLVED');
+    if (s.guessed.includes(playerId)) return reject(this.version, 'ALREADY_GUESSED');
+
+    const card = this.state.currentCard;
+    const artist = String(command.payload.artist ?? '').trim();
+    const title = String(command.payload.title ?? '').trim();
+    const passed = !!command.payload.pass || (!artist && !title);
+
+    const prev = s.feedback[playerId];
+    const feedback = { ...s.feedback };
+    const solved = { ...s.solved };
+    if (!passed) {
+      const artistCorrect = !!prev?.artistCorrect || (!!artist && isArtistMatch(artist, card.artist));
+      const titleCorrect = !!prev?.titleCorrect || (!!title && isCloseMatch(title, card.title));
+      feedback[playerId] = {
+        artist: artist || prev?.artist || '',
+        title: title || prev?.title || '',
+        artistCorrect,
+        titleCorrect,
+      };
+      if (artistCorrect && titleCorrect) {
+        const points = SNIPPET_POINTS[s.stage] ?? 1;
+        solved[playerId] = { stage: s.stage, points };
+        const idx = this.state.players.findIndex((p) => p.id === playerId);
+        const p = this.state.players[idx];
+        this.state.players[idx] = { ...p, score: p.score + points, hand: [...p.hand, card] };
+      }
+    }
+
+    this.state.snippet = { ...s, feedback, solved, guessed: [...s.guessed, playerId] };
+
+    const stillGuessing = this.state.players.filter(
+      (p) => !solved[p.id] && !this.state!.snippet!.guessed.includes(p.id)
+    );
+    if (stillGuessing.length === 0) this.advanceSnippetStage();
+
+    this.state.version = ++this.version;
+    this.persistState();
+
+    return {
+      accepted: true,
+      newVersion: this.version,
+      stateDelta: {
+        phase: this.state.phase,
+        players: this.state.players,
+        snippet: this.state.snippet,
+        lastResult: this.state.lastResult,
+      },
+    };
+  }
+
+  /**
+   * Next, longer snippet — or the reveal, once everyone has named the song
+   * or the longest snippet is done. Mutates state only; the caller bumps the
+   * version and persists.
+   */
+  private advanceSnippetStage(): void {
+    if (!this.state?.snippet) return;
+    const s = this.state.snippet;
+    const everyoneSolved = this.state.players.every((p) => s.solved[p.id]);
+    if (everyoneSolved || s.stage >= s.stages.length - 1) {
+      this.finishSnippetRound();
+      return;
+    }
+    this.state.snippet = {
+      ...s,
+      stage: s.stage + 1,
+      guessed: [],
+      deadline: Date.now() + SNIPPET_STAGE_MS,
+    };
+  }
+
+  private finishSnippetRound(): void {
+    if (!this.state?.snippet || !this.state.currentCard) return;
+    const s = this.state.snippet;
+    const results: SnippetPlayerResult[] = this.state.players.map((p) => ({
+      playerId: p.id,
+      playerName: p.name,
+      solvedAtSec: s.solved[p.id] ? s.stages[s.solved[p.id].stage] : null,
+      points: s.solved[p.id]?.points ?? 0,
+      lastArtist: s.feedback[p.id]?.artist ?? '',
+      lastTitle: s.feedback[p.id]?.title ?? '',
+    }));
+    const anySolved = results.some((r) => r.solvedAtSec !== null);
+    this.state.lastResult = {
+      ...this.sharedRevealBase(this.state.currentCard),
+      mode: 'snippet',
+      artistCorrect: anySolved,
+      titleCorrect: anySolved,
+      points: results.reduce((sum, r) => sum + r.points, 0),
+      snippetResults: results,
+    };
+    this.state.phase = 'round_result';
+    this.state.snippet = null;
   }
 
   // ─── Speak mode voting ───
@@ -760,6 +1054,7 @@ export class MatchRoom extends DurableObject {
     this.state.lastResult = null;
     this.state.turnDeadline = null;
     this.state.buzzer = null;
+    this.state.snippet = null;
     this.state.voting = null;
     this.state.version = ++this.version;
     this.liveInput = null;

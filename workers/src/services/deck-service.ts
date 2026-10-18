@@ -1,6 +1,8 @@
 import { catalogService } from './catalog-service';
 import { enrichTrackYears } from './spotify-year-service';
-import { buildCategoryPool, getCategoryDefinition, MIN_CATEGORY_POOL, DEFAULT_CATEGORY } from './category-service';
+import { buildCategoryPool, getCategoryDefinition, minPoolFor, DEFAULT_CATEGORY } from './category-service';
+import { songKey } from './song-key';
+import type { HistoryTrack } from '../adapters/history-provider';
 import { DurableObjectHistoryStore, DurableObjectRecentPickStore } from '../db/repositories/durable-object-repository';
 import { DECADE_HITS, DECADES } from '../db/decade-hits';
 import type { DecadeHit } from '../db/decade-hits';
@@ -242,30 +244,67 @@ export async function buildHistoryDeck(
   recency: Recency = NO_RECENCY
 ): Promise<Card[] | undefined> {
   const histories = await new DurableObjectHistoryStore(env).getHistories(lobby.id);
-  const pool = buildCategoryPool(category, histories, lobby.players.map((p) => p.id));
+  const playerIds = lobby.players.map((p) => p.id);
+  const pool = buildCategoryPool(category, histories, playerIds);
+  const minPool = minPoolFor(category);
 
-  if (pool.length < MIN_CATEGORY_POOL) {
-    console.warn(`[buildHistoryDeck] pool too small for "${category}" (${pool.length}/${MIN_CATEGORY_POOL})`);
+  if (pool.length < minPool) {
+    console.warn(`[buildHistoryDeck] pool too small for "${category}" (${pool.length}/${minPool})`);
     return undefined;
   }
 
   // A player's top tracks are a short list by definition, so this pool
   // repeats even harder than the curated one without the recency ranking.
-  const cards = orderByFreshness(pool, (t) => trackKey(t.artist, t.title), recency)
-    .slice(0, deckSize)
-    .map((t): Card => ({
-      id: t.id,
-      title: t.title,
-      artist: t.artist,
-      year: t.year ?? 2000,
-      genre: 'Pop',
-      emoji: '🎵',
-      gradient: CARD_GRADIENT,
-      // History artist strings can list several artists — search with the first
-      previewQuery: `${t.artist.split(',')[0].trim()} ${t.title}`,
-    }));
+  const rank = (tracks: HistoryTrack[]) =>
+    orderByFreshness(tracks, (t) => trackKey(t.artist, t.title), recency);
+  const picked = rank(pool).slice(0, deckSize);
+  const cards = spreadArtists(shuffle(picked.map(cardFromHistoryTrack)));
 
-  return spreadArtists(shuffle(cards));
+  // The intersection behind "Alle kennen ihn" is usually smaller than a
+  // match needs. Topping it up with songs at least one player knows keeps
+  // the deck personal; the shared songs sit at the end of the array, which
+  // is the end the match draws from, so they all come up first.
+  if (category === 'heard_by_all' && picked.length < deckSize) {
+    const taken = new Set(picked.map((t) => songKey(t.artist, t.title)));
+    const extra = rank(
+      buildCategoryPool('heard_by_any', histories, playerIds)
+        .filter((t) => !taken.has(songKey(t.artist, t.title)))
+    ).slice(0, deckSize - picked.length);
+    return [...spreadArtists(shuffle(extra.map(cardFromHistoryTrack))), ...cards];
+  }
+
+  return cards;
+}
+
+function cardFromHistoryTrack(t: HistoryTrack): Card {
+  return {
+    id: t.id,
+    title: t.title,
+    artist: t.artist,
+    year: t.year ?? 2000,
+    genre: 'Pop',
+    emoji: '🎵',
+    gradient: CARD_GRADIENT,
+    // History artist strings can list several artists — search with the first
+    previewQuery: `${t.artist.split(',')[0].trim()} ${t.title}`,
+  };
+}
+
+/** Normalised song identity of a card, as used for dedupe and repeat protection. */
+export function cardKey(card: Card): string {
+  return dedupeKey(card);
+}
+
+/**
+ * Spare cards for a match whose deck ran dry mid-game (a small history pool,
+ * or a run of songs without a playable preview). Curated classics only:
+ * they need no lookups, so the draw that triggers the refill stays fast.
+ * `exclude` holds the cardKeys the match has already dealt.
+ */
+export function buildRefillCards(count: number, exclude: ReadonlySet<string>): Card[] {
+  const fresh = buildCuratedDecadeCards(Number.MAX_SAFE_INTEGER)
+    .filter((c) => !exclude.has(dedupeKey(c)));
+  return spreadArtists(shuffle(fresh).slice(0, count));
 }
 
 /**
@@ -303,9 +342,25 @@ export async function buildDeck(env: Env, lobby: Lobby): Promise<Card[] | undefi
 
   let deck: Card[] | undefined;
   if (def?.requiresHistory) {
-    deck = await buildHistoryDeck(env, lobby, category, size, recency);
+    try {
+      deck = await buildHistoryDeck(env, lobby, category, size, recency);
+    } catch (err) {
+      console.warn(`[buildDeck] history deck failed for "${category}":`, err);
+    }
     if (!deck) console.warn(`[buildDeck] falling back to random-hits deck for category "${category}"`);
   }
+
+  if (deck && deck.length < size) {
+    // A history pool smaller than the match used to make the deck run dry
+    // and end the match early. Top it up with curated classics, placed at
+    // the front so they are only drawn once the category's songs are used.
+    const have = new Set(deck.map(dedupeKey));
+    const filler = buildCuratedDecadeCards(size, recency)
+      .filter((c) => !have.has(dedupeKey(c)))
+      .slice(0, size - deck.length);
+    deck = [...spreadArtists(shuffle(filler)), ...deck];
+  }
+
   deck ??= await buildRandomHitsDeck(env, size, recency);
 
   if (deck?.length) {
