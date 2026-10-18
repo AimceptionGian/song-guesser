@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
+import VolumeControl, { useStoredVolume } from './VolumeControl';
 
 interface AudioPlayerProps {
   previewUrl?: string;
@@ -74,18 +75,6 @@ function getFallbackUrl(): string {
   return cachedFallbackUrl;
 }
 
-const VOLUME_STORAGE_KEY = 'songguesser-volume';
-
-function loadStoredVolume(): number {
-  try {
-    const stored = localStorage.getItem(VOLUME_STORAGE_KEY);
-    const v = stored === null ? NaN : Number(stored);
-    return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 0.8;
-  } catch {
-    return 0.8;
-  }
-}
-
 // Deterministische Pseudo-Waveform (gleiche Optik für alle Spieler)
 const WAVE_BARS = Array.from({ length: 30 }, (_, i) => {
   const h = 0.3 + 0.7 * Math.abs(Math.sin(i * 2.3) * Math.cos(i * 0.7));
@@ -107,8 +96,7 @@ export default function AudioPlayer({
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [hasError, setHasError] = useState(false);
-  const [volume, setVolume] = useState(loadStoredVolume);
-  const lastVolumeRef = useRef(volume > 0 ? volume : 0.8);
+  const { volume, setVolume, toggleMute } = useStoredVolume();
   // Spectator: browser blocked autoplay — needs one tap to unlock audio
   const [needsGesture, setNeedsGesture] = useState(false);
   // Preview-URL, die sich nicht laden liess (z.B. abgelaufener CDN-Token)
@@ -170,20 +158,10 @@ export default function AudioPlayer({
     };
   }, [effectiveUrl, usableUrl]);
 
-  // Apply volume to the (possibly recreated) audio element and persist it
+  // Apply volume to the (possibly recreated) audio element
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume;
-    if (volume > 0) lastVolumeRef.current = volume;
-    try {
-      localStorage.setItem(VOLUME_STORAGE_KEY, String(volume));
-    } catch {
-      // localStorage unavailable (e.g. private mode) — volume just won't persist
-    }
   }, [volume, effectiveUrl]);
-
-  const toggleMute = useCallback(() => {
-    setVolume((v) => (v > 0 ? 0 : lastVolumeRef.current));
-  }, []);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
@@ -411,40 +389,7 @@ export default function AudioPlayer({
         {noAudio ? 'Keine Vorschau' : `${formatTime(displayCurrent)} / ${formatTime(displayDuration)}`}
       </span>
 
-      {/* Volume */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-        <button
-          onClick={toggleMute}
-          disabled={noAudio}
-          title={volume > 0 ? 'Stummschalten' : 'Ton an'}
-          style={{
-            border: 'none',
-            background: 'none',
-            padding: 0,
-            cursor: noAudio ? 'default' : 'pointer',
-            fontSize: 15,
-            lineHeight: 1,
-          }}
-        >
-          {volume === 0 ? '🔇' : volume < 0.5 ? '🔉' : '🔊'}
-        </button>
-        <input
-          type="range"
-          className="volume-slider"
-          min={0}
-          max={1}
-          step={0.05}
-          value={volume}
-          disabled={noAudio}
-          onChange={(e) => setVolume(Number(e.target.value))}
-          title={`Lautstärke: ${Math.round(volume * 100)}%`}
-          style={{
-            width: 74,
-            background: `linear-gradient(90deg, var(--lime) 0%, var(--lime) ${volume * 100}%, rgba(214,245,69,0.15) ${volume * 100}%)`,
-            cursor: noAudio ? 'default' : 'pointer',
-          }}
-        />
-      </div>
+      <VolumeControl volume={volume} onChange={setVolume} onToggleMute={toggleMute} disabled={noAudio} />
     </div>
   );
 }

@@ -740,6 +740,18 @@ describe('MatchRoom Durable Object', () => {
       expect(state.players.every((p: any) => p.score === 0)).toBe(true);
     });
 
+    it('passing (an empty answer) hands the buzzer straight back to the others', async () => {
+      await drawBuzzerSong();
+      await cmd(room, 'buzz', { playerId: 'p2' });
+      const data = await cmd(room, 'buzzer_answer', { playerId: 'p2', artist: '', title: '' });
+
+      expect(data.accepted).toBe(true);
+      expect(data.state.phase).toBe('buzzer');
+      expect(data.state.buzzer.winnerId).toBeNull();
+      expect(data.state.buzzer.lockedOut).toEqual(['p2']);
+      expect(data.state.players.find((p: any) => p.id === 'p2').score).toBe(0);
+    });
+
     it('only the buzz winner may answer', async () => {
       await drawBuzzerSong();
       await cmd(room, 'buzz', { playerId: 'p2' });

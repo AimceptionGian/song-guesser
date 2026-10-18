@@ -54,11 +54,13 @@ export function BuzzerRound({
     return () => window.removeEventListener('keydown', onKey);
   }, [canBuzz, onBuzz]);
 
-  const submit = async () => {
-    if (sending || (!artist.trim() && !title.trim())) return;
+  const submit = async (pass = false) => {
+    if (sending || (!pass && !artist.trim() && !title.trim())) return;
     setSending(true);
     try {
-      await onAnswer({ artist: artist.trim(), title: title.trim() });
+      // Passing = an empty answer: it counts as this player's miss and
+      // hands the buzzer straight back to the others (e.g. buzzed by accident)
+      await onAnswer(pass ? { artist: '', title: '' } : { artist: artist.trim(), title: title.trim() });
     } finally {
       setSending(false);
     }
@@ -119,13 +121,24 @@ export function BuzzerRound({
               onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
             />
           </div>
-          <button
-            onClick={() => void submit()}
-            disabled={sending || (!artist.trim() && !title.trim())}
-            className="btn-primary"
-          >
-            {sending ? <><span className="spinner" /> Wird geprüft…</> : 'Antwort abgeben ✓'}
-          </button>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
+            <button
+              onClick={() => void submit()}
+              disabled={sending || (!artist.trim() && !title.trim())}
+              className="btn-primary"
+            >
+              {sending ? <><span className="spinner" /> Wird geprüft…</> : 'Antwort abgeben ✓'}
+            </button>
+            <button
+              onClick={() => void submit(true)}
+              disabled={sending}
+              className="btn-ghost"
+              title="Ohne Antwort zurückgeben — die anderen dürfen buzzern"
+              style={{ padding: '10px 16px' }}
+            >
+              Passen
+            </button>
+          </div>
         </div>
       ) : buzzer.winnerId ? (
         <div style={{ textAlign: 'center', color: 'var(--gold)', fontWeight: 600, fontSize: '0.95rem' }}>
@@ -173,7 +186,7 @@ function AttemptList({ attempts }: { attempts: BuzzAttempt[] }) {
             <span>{hit ? '✅' : '❌'}</span>
             <strong style={{ color: 'var(--ink)' }}>{a.playerName}</strong>
             <span style={{ color: 'var(--muted)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {a.artist || a.title ? `„${[a.artist, a.title].filter(Boolean).join(' – ')}"` : 'keine Antwort'}
+              {a.artist || a.title ? `„${[a.artist, a.title].filter(Boolean).join(' – ')}"` : 'gepasst / keine Antwort'}
             </span>
             {half && (
               <span style={{ marginLeft: 'auto', color: 'var(--gold)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>

@@ -1,21 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import VolumeControl, { useStoredVolume } from './VolumeControl';
 
 interface SnippetPlayerProps {
   previewUrl?: string;
   /** How much of the song's start to play, in seconds (e.g. 0.1). */
   durationSec: number;
-}
-
-// Same key as AudioPlayer, so the snippet plays at the volume the player chose there
-const VOLUME_STORAGE_KEY = 'songguesser-volume';
-
-function loadStoredVolume(): number {
-  try {
-    const v = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
-    return localStorage.getItem(VOLUME_STORAGE_KEY) !== null && v >= 0 && v <= 1 ? v : 0.8;
-  } catch {
-    return 0.8;
-  }
 }
 
 /** "0,1 s" — German decimal comma, as everywhere else in the UI. */
@@ -40,6 +29,14 @@ export default function SnippetPlayer({ previewUrl, durationSec }: SnippetPlayer
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [plays, setPlays] = useState(0);
+  const { volume, setVolume, toggleMute } = useStoredVolume();
+  // Read by the audio setup below without re-creating the element per change
+  const volumeRef = useRef(volume);
+
+  useEffect(() => {
+    volumeRef.current = volume;
+    if (audioRef.current) audioRef.current.volume = volume;
+  }, [volume]);
 
   useEffect(() => {
     setReady(false);
@@ -50,7 +47,7 @@ export default function SnippetPlayer({ previewUrl, durationSec }: SnippetPlayer
     }
     const audio = new Audio(previewUrl);
     audio.preload = 'auto';
-    audio.volume = loadStoredVolume();
+    audio.volume = volumeRef.current;
     audioRef.current = audio;
     const onReady = () => setReady(true);
     const onError = () => setFailed(true);
@@ -121,7 +118,7 @@ export default function SnippetPlayer({ previewUrl, durationSec }: SnippetPlayer
   const label = formatSnippetSec(durationSec);
 
   return (
-    <div className="panel-inset" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 14px' }}>
+    <div className="panel-inset" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 14, padding: '12px 14px' }}>
       <button
         onClick={play}
         disabled={!ready || playing || failed}
@@ -150,7 +147,7 @@ export default function SnippetPlayer({ previewUrl, durationSec }: SnippetPlayer
           </span>
         </span>
       </button>
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ flex: 1, minWidth: 150 }}>
         <div className="display" style={{ fontSize: '1rem', color: 'var(--ink)' }}>
           {failed ? 'Vorschau lädt nicht' : !ready ? 'Lädt …' : playing ? 'Läuft …' : plays === 0 ? `${label} anhören` : `Nochmal ${label}`}
         </div>
@@ -164,6 +161,13 @@ export default function SnippetPlayer({ previewUrl, durationSec }: SnippetPlayer
           {plays > 0 ? `${plays}× gehört · beliebig oft wiederholbar` : 'für alle derselbe Ausschnitt · beliebig oft wiederholbar'}
         </div>
       </div>
+      <VolumeControl
+        volume={volume}
+        onChange={setVolume}
+        onToggleMute={toggleMute}
+        disabled={failed}
+        accent="var(--cyan)"
+      />
     </div>
   );
 }
